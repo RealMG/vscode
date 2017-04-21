@@ -175,8 +175,14 @@ export class TerminalTaskSystem extends EventEmitter implements ITaskSystem {
 		if (!terminalData) {
 			return TPromise.as<TerminateResponse>({ success: false });
 		};
-		terminalData.terminal.dispose();
-		return TPromise.as<TerminateResponse>({ success: true });
+		return new TPromise<TerminateResponse>((resolve, reject) => {
+			let terminal = terminalData.terminal;
+			const onExit = terminal.onExit(() => {
+				onExit.dispose();
+				resolve({ success: true });
+			});
+			terminal.dispose();
+		});
 	}
 
 	public terminateAll(): TPromise<TerminateResponse> {
@@ -236,11 +242,11 @@ export class TerminalTaskSystem extends EventEmitter implements ITaskSystem {
 				let toUnbind: IDisposable[] = [];
 				let event: TaskEvent = { taskId: task._id, taskName: task.name, type: TaskType.Watching };
 				let eventCounter: number = 0;
-				toUnbind.push(watchingProblemMatcher.addListener2(ProblemCollectorEvents.WatchingBeginDetected, () => {
+				toUnbind.push(watchingProblemMatcher.addListener(ProblemCollectorEvents.WatchingBeginDetected, () => {
 					eventCounter++;
 					this.emit(TaskSystemEvents.Active, event);
 				}));
-				toUnbind.push(watchingProblemMatcher.addListener2(ProblemCollectorEvents.WatchingEndDetected, () => {
+				toUnbind.push(watchingProblemMatcher.addListener(ProblemCollectorEvents.WatchingEndDetected, () => {
 					eventCounter--;
 					this.emit(TaskSystemEvents.Inactive, event);
 				}));
@@ -291,6 +297,7 @@ export class TerminalTaskSystem extends EventEmitter implements ITaskSystem {
 		} else {
 			promise = new TPromise<ITaskSummary>((resolve, reject) => {
 				[terminal, executedCommand] = this.createTerminal(task);
+				let event: TaskEvent = { taskId: task._id, taskName: task.name, type: TaskType.SingleRun };
 				this.emit(TaskSystemEvents.Active, event);
 				let decoder = new TerminalDecoder();
 				let problemMatchers = this.resolveMatchers(task.problemMatchers);

@@ -7,7 +7,7 @@
 import { Position } from 'vs/editor/common/core/position';
 import { CharCode } from 'vs/base/common/charCode';
 import * as strings from 'vs/base/common/strings';
-import { ICommand, IConfigurationChangedEvent, TextModelResolvedOptions, IConfiguration } from 'vs/editor/common/editorCommon';
+import { ICommand, TextModelResolvedOptions, IConfiguration } from 'vs/editor/common/editorCommon';
 import { TextModel } from 'vs/editor/common/model/textModel';
 import { Selection } from 'vs/editor/common/core/selection';
 import { Range } from 'vs/editor/common/core/range';
@@ -15,6 +15,7 @@ import { LanguageConfigurationRegistry } from 'vs/editor/common/modes/languageCo
 import { onUnexpectedError } from 'vs/base/common/errors';
 import { LanguageIdentifier } from 'vs/editor/common/modes';
 import { IAutoClosingPair } from 'vs/editor/common/modes/languageConfiguration';
+import { IConfigurationChangedEvent } from "vs/editor/common/config/editorOptions";
 
 export interface CharacterMap {
 	[char: string]: string;
@@ -27,6 +28,7 @@ export class CursorConfiguration {
 	public readonly insertSpaces: boolean;
 	public readonly oneIndent: string;
 	public readonly pageSize: number;
+	public readonly lineHeight: number;
 	public readonly useTabStops: boolean;
 	public readonly wordSeparators: string;
 	public readonly autoClosingBrackets: boolean;
@@ -41,6 +43,7 @@ export class CursorConfiguration {
 			|| e.wordSeparators
 			|| e.autoClosingBrackets
 			|| e.useTabStops
+			|| e.lineHeight
 		);
 	}
 
@@ -56,6 +59,7 @@ export class CursorConfiguration {
 		this.insertSpaces = modelOptions.insertSpaces;
 		this.oneIndent = oneIndent;
 		this.pageSize = Math.floor(c.layoutInfo.height / c.fontInfo.lineHeight) - 2;
+		this.lineHeight = c.lineHeight;
 		this.useTabStops = c.useTabStops;
 		this.wordSeparators = c.wordSeparators;
 		this.autoClosingBrackets = c.autoClosingBrackets;

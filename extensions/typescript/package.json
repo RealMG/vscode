@@ -12,7 +12,7 @@
   },
   "dependencies": {
     "semver": "4.3.6",
-    "vscode-extension-telemetry": "^0.0.6",
+    "vscode-extension-telemetry": "^0.0.7",
     "vscode-nls": "^2.0.1"
   },
   "devDependencies": {
@@ -191,6 +191,11 @@
           "default": false,
           "description": "%format.insertSpaceAfterOpeningAndBeforeClosingNonemptyBrackets%"
         },
+        "typescript.format.insertSpaceAfterOpeningAndBeforeClosingNonemptyBraces": {
+          "type": "boolean",
+          "default": true,
+          "description": "%format.insertSpaceAfterOpeningAndBeforeClosingNonemptyBraces%"
+        },
         "typescript.format.insertSpaceAfterOpeningAndBeforeClosingTemplateStringBraces": {
           "type": "boolean",
           "default": false,
@@ -261,6 +266,11 @@
           "default": false,
           "description": "%format.insertSpaceAfterOpeningAndBeforeClosingNonemptyBrackets%"
         },
+        "javascript.format.insertSpaceAfterOpeningAndBeforeClosingNonemptyBraces": {
+          "type": "boolean",
+          "default": true,
+          "description": "%format.insertSpaceAfterOpeningAndBeforeClosingNonemptyBraces%"
+        },
         "javascript.format.insertSpaceAfterOpeningAndBeforeClosingTemplateStringBraces": {
           "type": "boolean",
           "default": false,
@@ -280,6 +290,11 @@
           "type": "boolean",
           "default": false,
           "description": "%format.placeOpenBraceOnNewLineForControlBlocks%"
+        },
+        "jsDocCompletion.enabled": {
+          "type": "boolean",
+          "default": true,
+          "description": "%jsDocCompletion.enabled%"
         }
       }
     },
@@ -376,6 +391,14 @@
       },
       {
         "fileMatch": "tsconfig.json",
+        "url": "./schemas/tsconfig.schema.json"
+      },
+       {
+        "fileMatch": "tsconfig.*.json",
+        "url": "http://json.schemastore.org/tsconfig"
+      },
+      {
+        "fileMatch": "tsconfig.*.json",
         "url": "./schemas/tsconfig.schema.json"
       },
       {

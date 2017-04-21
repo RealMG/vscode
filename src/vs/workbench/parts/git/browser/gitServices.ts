@@ -74,7 +74,7 @@ class EditorInputCache {
 		this.cache = {};
 		this.toDispose = [];
 
-		this.toDispose.push(this.gitService.getModel().addListener2('fileStatus:dispose', (fileStatus: IFileStatus) => this.onFileStatusDispose(fileStatus)));
+		this.toDispose.push(this.gitService.getModel().addListener('fileStatus:dispose', (fileStatus: IFileStatus) => this.onFileStatusDispose(fileStatus)));
 	}
 
 	getInput(status: IFileStatus): TPromise<EditorInput> {
@@ -193,10 +193,10 @@ class EditorInputCache {
 					resource = URI.file(paths.join(model.getRepositoryRoot(), indexStatus.getRename()));
 				}
 
-				return this.editorService.createInput({ resource });
+				return TPromise.as(this.editorService.createInput({ resource }));
 
 			case Status.BOTH_MODIFIED:
-				return this.editorService.createInput({ resource });
+				return TPromise.as(this.editorService.createInput({ resource }));
 
 			default:
 				return TPromise.as(null);
@@ -296,7 +296,7 @@ export class AutoFetcher implements IAutoFetcher, IDisposable {
 			return;
 		}
 
-		this.gitServiceStateDisposable = this.gitService.addListener2(ServiceEvents.STATE_CHANGED, (e) => this.onGitServiceStateChange(e));
+		this.gitServiceStateDisposable = this.gitService.addListener(ServiceEvents.STATE_CHANGED, (e) => this.onGitServiceStateChange(e));
 		this._state = AutoFetcherState.Active;
 		this.onGitServiceStateChange(this.gitService.getState());
 	}

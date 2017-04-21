@@ -5,18 +5,172 @@
 'use strict';
 
 import { SingleCursorState, CursorConfiguration, ICursorSimpleModel, CursorState } from 'vs/editor/common/controller/cursorCommon';
-import { Position } from 'vs/editor/common/core/position';
+import { Position, IPosition } from 'vs/editor/common/core/position';
 import { Range } from 'vs/editor/common/core/range';
-import { Selection, SelectionDirection } from 'vs/editor/common/core/selection';
+import { Selection, SelectionDirection, ISelection } from 'vs/editor/common/core/selection';
 import * as editorCommon from 'vs/editor/common/editorCommon';
 import { MoveOperations } from 'vs/editor/common/controller/cursorMoveOperations';
 import { WordOperations } from 'vs/editor/common/controller/cursorWordOperations';
 import { ICoordinatesConverter } from 'vs/editor/common/viewModel/viewModel';
+import * as types from 'vs/base/common/types';
+import { ICommandHandlerDescription } from 'vs/platform/commands/common/commands';
 
-export interface CursorMoveArguments extends editorCommon.CursorMoveArguments {
+/**
+ * Positions in the view for cursor move command.
+ */
+export const CursorMovePosition = {
+	Left: 'left',
+	Right: 'right',
+	Up: 'up',
+	Down: 'down',
+
+	WrappedLineStart: 'wrappedLineStart',
+	WrappedLineFirstNonWhitespaceCharacter: 'wrappedLineFirstNonWhitespaceCharacter',
+	WrappedLineColumnCenter: 'wrappedLineColumnCenter',
+	WrappedLineEnd: 'wrappedLineEnd',
+	WrappedLineLastNonWhitespaceCharacter: 'wrappedLineLastNonWhitespaceCharacter',
+
+	ViewPortTop: 'viewPortTop',
+	ViewPortCenter: 'viewPortCenter',
+	ViewPortBottom: 'viewPortBottom',
+
+	ViewPortIfOutside: 'viewPortIfOutside'
+};
+
+/**
+ * Units for Cursor move 'by' argument
+ */
+export const CursorMoveByUnit = {
+	Line: 'line',
+	WrappedLine: 'wrappedLine',
+	Character: 'character',
+	HalfLine: 'halfLine'
+};
+
+/**
+ * Arguments for Cursor move command
+ */
+export interface CursorMoveArguments {
+	to: string;
+	select?: boolean;
+	by?: string;
+	value?: number;
 	pageSize?: number;
 	isPaged?: boolean;
-}
+};
+
+/**
+ * @internal
+ */
+const isCursorMoveArgs = function (arg): boolean {
+	if (!types.isObject(arg)) {
+		return false;
+	}
+
+	let cursorMoveArg: CursorMoveArguments = arg;
+
+	if (!types.isString(cursorMoveArg.to)) {
+		return false;
+	}
+
+	if (!types.isUndefined(cursorMoveArg.select) && !types.isBoolean(cursorMoveArg.select)) {
+		return false;
+	}
+
+	if (!types.isUndefined(cursorMoveArg.by) && !types.isString(cursorMoveArg.by)) {
+		return false;
+	}
+
+	if (!types.isUndefined(cursorMoveArg.value) && !types.isNumber(cursorMoveArg.value)) {
+		return false;
+	}
+
+	return true;
+};
+
+/**
+ * Arguments for reveal line command
+ */
+export interface RevealLineArguments {
+	lineNumber?: number;
+	at?: string;
+};
+
+/**
+ * Values for reveal line 'at' argument
+ */
+export const RevealLineAtArgument = {
+	Top: 'top',
+	Center: 'center',
+	Bottom: 'bottom'
+};
+
+/**
+ * @internal
+ */
+const isRevealLineArgs = function (arg): boolean {
+	if (!types.isObject(arg)) {
+		return false;
+	}
+
+	let reveaLineArg: RevealLineArguments = arg;
+
+	if (!types.isNumber(reveaLineArg.lineNumber)) {
+		return false;
+	}
+
+	if (!types.isUndefined(reveaLineArg.at) && !types.isString(reveaLineArg.at)) {
+		return false;
+	}
+
+	return true;
+};
+
+/**
+ * @internal
+ */
+export var CommandDescription = {
+	CursorMove: <ICommandHandlerDescription>{
+		description: 'Move cursor to a logical position in the view',
+		args: [
+			{
+				name: 'Cursor move argument object',
+				description: `Property-value pairs that can be passed through this argument:
+					* 'to': A mandatory logical position value providing where to move the cursor.
+						\`\`\`
+						'left', 'right', 'up', 'down'
+						'wrappedLineStart', 'wrappedLineEnd', 'wrappedLineColumnCenter'
+						'wrappedLineFirstNonWhitespaceCharacter', 'wrappedLineLastNonWhitespaceCharacter',
+						'viewPortTop', 'viewPortCenter', 'viewPortBottom', 'viewPortIfOutside'
+						\`\`\`
+					* 'by': Unit to move. Default is computed based on 'to' value.
+						\`\`\`
+						'line', 'wrappedLine', 'character', 'halfLine'
+						\`\`\`
+					* 'value': Number of units to move. Default is '1'.
+					* 'select': If 'true' makes the selection. Default is 'false'.
+				`,
+				constraint: isCursorMoveArgs
+			}
+		]
+	},
+	RevealLine: <ICommandHandlerDescription>{
+		description: 'Reveal the given line at the given logical position',
+		args: [
+			{
+				name: 'Reveal line argument object',
+				description: `Property-value pairs that can be passed through this argument:
+					* 'lineNumber': A mandatory line number value.
+					* 'at': Logical position at which line has to be revealed .
+						\`\`\`
+						'top', 'center', 'bottom'
+						\`\`\`
+				`,
+				constraint: isRevealLineArgs
+			}
+		]
+	}
+};
 
 export interface IViewModelHelper {
 
@@ -24,7 +178,13 @@ export interface IViewModelHelper {
 
 	viewModel: ICursorSimpleModel;
 
+	getScrollTop(): number;
+
 	getCompletelyVisibleViewRange(): Range;
+
+	getCompletelyVisibleViewRangeAtScrollTop(scrollTop: number): Range;
+
+	getVerticalOffsetForViewLineNumber(viewLineNumber: number): number;
 }
 
 export class CursorContext {
@@ -45,7 +205,7 @@ export class CursorContext {
 		this._coordinatesConverter = viewModelHelper.coordinatesConverter;
 	}
 
-	public validateModelPosition(position: editorCommon.IPosition): Position {
+	public validateModelPosition(position: IPosition): Position {
 		return this.model.validatePosition(position);
 	}
 
@@ -73,6 +233,10 @@ export class CursorContext {
 		return this._coordinatesConverter.convertModelRangeToViewRange(modelRange);
 	}
 
+	public getScrollTop(): number {
+		return this._viewModelHelper.getScrollTop();
+	}
+
 	public getCompletelyVisibleViewRange(): Range {
 		return this._viewModelHelper.getCompletelyVisibleViewRange();
 	}
@@ -82,41 +246,17 @@ export class CursorContext {
 		return this._coordinatesConverter.convertViewRangeToModelRange(viewRange);
 	}
 
-	public getRangeToRevealModelLinesBeforeViewPortTop(noOfLinesBeforeTop: number): Range {
-		let visibleModelRange = this.getCompletelyVisibleModelRange();
-
-		let startLineNumber: number;
-		if (this.model.getLineMinColumn(visibleModelRange.startLineNumber) !== visibleModelRange.startColumn) {
-			// Start line is partially visible by wrapping so reveal start line
-			startLineNumber = visibleModelRange.startLineNumber;
-		} else {
-			// Reveal previous line
-			startLineNumber = visibleModelRange.startLineNumber - 1;
-		}
-
-		startLineNumber -= (noOfLinesBeforeTop - 1);
-		startLineNumber = this.model.validateRange({ startLineNumber, startColumn: 1, endLineNumber: startLineNumber, endColumn: 1 }).startLineNumber;
-		let startColumn = this.model.getLineMinColumn(startLineNumber);
-		let endColumn = this.model.getLineMaxColumn(visibleModelRange.startLineNumber);
-
-		return new Range(startLineNumber, startColumn, startLineNumber, endColumn);
+	public getCompletelyVisibleViewRangeAtScrollTop(scrollTop: number): Range {
+		return this._viewModelHelper.getCompletelyVisibleViewRangeAtScrollTop(scrollTop);
 	}
 
-	public getRangeToRevealModelLinesAfterViewPortBottom(noOfLinesAfterBottom: number): Range {
-		let visibleModelRange = this.getCompletelyVisibleModelRange();
-
-		// Last line in the view port is not considered revealed because scroll bar would cover it
-		// Hence consider last line to reveal in the range
-		let startLineNumber = visibleModelRange.endLineNumber + (noOfLinesAfterBottom - 1);
-		startLineNumber = this.model.validateRange({ startLineNumber, startColumn: 1, endLineNumber: startLineNumber, endColumn: 1 }).startLineNumber;
-		let startColumn = this.model.getLineMinColumn(startLineNumber);
-		let endColumn = this.model.getLineMaxColumn(startLineNumber);
-
-		return new Range(startLineNumber, startColumn, startLineNumber, endColumn);
+	public getCompletelyVisibleModelRangeAtScrollTop(scrollTop: number): Range {
+		const viewRange = this._viewModelHelper.getCompletelyVisibleViewRangeAtScrollTop(scrollTop);
+		return this._coordinatesConverter.convertViewRangeToModelRange(viewRange);
 	}
 
-	public isLastLineVisibleInViewPort(): boolean {
-		return this.viewModel.getLineCount() <= this.getCompletelyVisibleViewRange().getEndPosition().lineNumber;
+	public getVerticalOffsetForViewLine(viewLineNumber: number): number {
+		return this._viewModelHelper.getVerticalOffsetForViewLineNumber(viewLineNumber);
 	}
 }
 
@@ -245,7 +385,7 @@ export class OneCursor {
 		context.model._removeMarker(this._selEndMarker);
 	}
 
-	public setSelection(context: CursorContext, selection: editorCommon.ISelection, viewSelection: editorCommon.ISelection = null): void {
+	public setSelection(context: CursorContext, selection: ISelection, viewSelection: ISelection = null): void {
 		let position = context.model.validatePosition({
 			lineNumber: selection.positionLineNumber,
 			column: selection.positionColumn
@@ -316,7 +456,7 @@ export class OneCursorOp {
 
 	// -------------------- START handlers that simply change cursor state
 
-	public static moveTo(context: CursorContext, cursor: OneCursor, inSelectionMode: boolean, _position: editorCommon.IPosition, _viewPosition: editorCommon.IPosition): CursorState {
+	public static moveTo(context: CursorContext, cursor: OneCursor, inSelectionMode: boolean, _position: IPosition, _viewPosition: IPosition): CursorState {
 		const position = context.validateModelPosition(_position);
 		const viewPosition = (
 			_viewPosition
@@ -333,8 +473,8 @@ export class OneCursorOp {
 
 		const inSelectionMode = !!moveParams.select;
 		switch (moveParams.to) {
-			case editorCommon.CursorMovePosition.Left: {
-				if (moveParams.by === editorCommon.CursorMoveByUnit.HalfLine) {
+			case CursorMovePosition.Left: {
+				if (moveParams.by === CursorMoveByUnit.HalfLine) {
 					// Move left by half the current line length
 					return this._moveHalfLineLeft(context, cursors, inSelectionMode);
 				} else {
@@ -342,8 +482,8 @@ export class OneCursorOp {
 					return this._moveLeft(context, cursors, inSelectionMode, moveParams.value);
 				}
 			}
-			case editorCommon.CursorMovePosition.Right: {
-				if (moveParams.by === editorCommon.CursorMoveByUnit.HalfLine) {
+			case CursorMovePosition.Right: {
+				if (moveParams.by === CursorMoveByUnit.HalfLine) {
 					// Move right by half the current line length
 					return this._moveHalfLineRight(context, cursors, inSelectionMode);
 				} else {
@@ -351,9 +491,9 @@ export class OneCursorOp {
 					return this._moveRight(context, cursors, inSelectionMode, moveParams.value);
 				}
 			}
-			case editorCommon.CursorMovePosition.Up: {
+			case CursorMovePosition.Up: {
 				const linesCount = (moveParams.isPaged ? (moveParams.pageSize || context.config.pageSize) : moveParams.value) || 1;
-				if (moveParams.by === editorCommon.CursorMoveByUnit.WrappedLine) {
+				if (moveParams.by === CursorMoveByUnit.WrappedLine) {
 					// Move up by `linesCount` view lines
 					return this._moveUpByViewLines(context, cursors, inSelectionMode, linesCount);
 				} else {
@@ -361,9 +501,9 @@ export class OneCursorOp {
 					return this._moveUpByModelLines(context, cursors, inSelectionMode, linesCount);
 				}
 			}
-			case editorCommon.CursorMovePosition.Down: {
+			case CursorMovePosition.Down: {
 				const linesCount = (moveParams.isPaged ? (moveParams.pageSize || context.config.pageSize) : moveParams.value) || 1;
-				if (editorCommon.CursorMoveByUnit.WrappedLine === moveParams.by) {
+				if (CursorMoveByUnit.WrappedLine === moveParams.by) {
 					// Move down by `linesCount` view lines
 					return this._moveDownByViewLines(context, cursors, inSelectionMode, linesCount);
 				} else {
@@ -371,27 +511,27 @@ export class OneCursorOp {
 					return this._moveDownByModelLines(context, cursors, inSelectionMode, linesCount);
 				}
 			}
-			case editorCommon.CursorMovePosition.WrappedLineStart: {
+			case CursorMovePosition.WrappedLineStart: {
 				// Move to the beginning of the current view line
 				return this._moveToViewMinColumn(context, cursors, inSelectionMode);
 			}
-			case editorCommon.CursorMovePosition.WrappedLineFirstNonWhitespaceCharacter: {
+			case CursorMovePosition.WrappedLineFirstNonWhitespaceCharacter: {
 				// Move to the first non-whitespace column of the current view line
 				return this._moveToViewFirstNonWhitespaceColumn(context, cursors, inSelectionMode);
 			}
-			case editorCommon.CursorMovePosition.WrappedLineColumnCenter: {
+			case CursorMovePosition.WrappedLineColumnCenter: {
 				// Move to the "center" of the current view line
 				return this._moveToViewCenterColumn(context, cursors, inSelectionMode);
 			}
-			case editorCommon.CursorMovePosition.WrappedLineEnd: {
+			case CursorMovePosition.WrappedLineEnd: {
 				// Move to the end of the current view line
 				return this._moveToViewMaxColumn(context, cursors, inSelectionMode);
 			}
-			case editorCommon.CursorMovePosition.WrappedLineLastNonWhitespaceCharacter: {
+			case CursorMovePosition.WrappedLineLastNonWhitespaceCharacter: {
 				// Move to the last non-whitespace column of the current view line
 				return this._moveToViewLastNonWhitespaceColumn(context, cursors, inSelectionMode);
 			}
-			case editorCommon.CursorMovePosition.ViewPortTop: {
+			case CursorMovePosition.ViewPortTop: {
 				// Move to the nth line start in the viewport (from the top)
 				const cnt = (moveParams.value || 1);
 				const cursor = cursors[0];
@@ -400,7 +540,7 @@ export class OneCursorOp {
 				const modelColumn = context.model.getLineFirstNonWhitespaceColumn(modelLineNumber);
 				return [this._moveToModelPosition(context, cursor, inSelectionMode, modelLineNumber, modelColumn)];
 			}
-			case editorCommon.CursorMovePosition.ViewPortBottom: {
+			case CursorMovePosition.ViewPortBottom: {
 				// Move to the nth line start in the viewport (from the bottom)
 				const cnt = (moveParams.value || 1);
 				const cursor = cursors[0];
@@ -409,7 +549,7 @@ export class OneCursorOp {
 				const modelColumn = context.model.getLineFirstNonWhitespaceColumn(modelLineNumber);
 				return [this._moveToModelPosition(context, cursor, inSelectionMode, modelLineNumber, modelColumn)];
 			}
-			case editorCommon.CursorMovePosition.ViewPortCenter: {
+			case CursorMovePosition.ViewPortCenter: {
 				// Move to the line start in the viewport center
 				const cursor = cursors[0];
 				const visibleModelRange = context.getCompletelyVisibleModelRange();
@@ -417,34 +557,38 @@ export class OneCursorOp {
 				const modelColumn = context.model.getLineFirstNonWhitespaceColumn(modelLineNumber);
 				return [this._moveToModelPosition(context, cursor, inSelectionMode, modelLineNumber, modelColumn)];
 			}
-			case editorCommon.CursorMovePosition.ViewPortIfOutside: {
+			case CursorMovePosition.ViewPortIfOutside: {
 				// Move to a position inside the viewport
 				const visibleViewRange = context.getCompletelyVisibleViewRange();
 				let result: CursorState[] = [];
 				for (let i = 0, len = cursors.length; i < len; i++) {
 					const cursor = cursors[i];
-					let viewLineNumber = cursor.viewState.position.lineNumber;
-
-					if (visibleViewRange.startLineNumber <= viewLineNumber && viewLineNumber <= visibleViewRange.endLineNumber) {
-						// Nothing to do, cursor is in viewport
-						result[i] = new CursorState(cursor.modelState, cursor.viewState);
-
-					} else {
-						if (viewLineNumber > visibleViewRange.endLineNumber) {
-							viewLineNumber = visibleViewRange.endLineNumber - 1;
-						}
-						if (viewLineNumber < visibleViewRange.startLineNumber) {
-							viewLineNumber = visibleViewRange.startLineNumber;
-						}
-						const viewColumn = context.viewModel.getLineFirstNonWhitespaceColumn(viewLineNumber);
-						result[i] = this._moveToViewPosition(context, cursor, inSelectionMode, viewLineNumber, viewColumn);
-					}
+					result[i] = this.findPositionInViewportIfOutside(context, cursor, visibleViewRange, inSelectionMode);
 				}
 				return result;
 			}
 		}
 
 		return null;
+	}
+
+	public static findPositionInViewportIfOutside(context: CursorContext, cursor: OneCursor, visibleViewRange: Range, inSelectionMode: boolean): CursorState {
+		let viewLineNumber = cursor.viewState.position.lineNumber;
+
+		if (visibleViewRange.startLineNumber <= viewLineNumber && viewLineNumber <= visibleViewRange.endLineNumber - 1) {
+			// Nothing to do, cursor is in viewport
+			return new CursorState(cursor.modelState, cursor.viewState);
+
+		} else {
+			if (viewLineNumber > visibleViewRange.endLineNumber - 1) {
+				viewLineNumber = visibleViewRange.endLineNumber - 1;
+			}
+			if (viewLineNumber < visibleViewRange.startLineNumber) {
+				viewLineNumber = visibleViewRange.startLineNumber;
+			}
+			const viewColumn = context.viewModel.getLineFirstNonWhitespaceColumn(viewLineNumber);
+			return this._moveToViewPosition(context, cursor, inSelectionMode, viewLineNumber, viewColumn);
+		}
 	}
 
 	/**
@@ -742,7 +886,7 @@ export class OneCursorOp {
 		));
 	}
 
-	public static line(context: CursorContext, cursor: OneCursor, inSelectionMode: boolean, _position: editorCommon.IPosition, _viewPosition: editorCommon.IPosition): CursorState {
+	public static line(context: CursorContext, cursor: OneCursor, inSelectionMode: boolean, _position: IPosition, _viewPosition: IPosition): CursorState {
 		const position = context.validateModelPosition(_position);
 		const viewPosition = (
 			_viewPosition
@@ -801,7 +945,7 @@ export class OneCursorOp {
 		}
 	}
 
-	public static word(context: CursorContext, cursor: OneCursor, inSelectionMode: boolean, _position: editorCommon.IPosition): CursorState {
+	public static word(context: CursorContext, cursor: OneCursor, inSelectionMode: boolean, _position: IPosition): CursorState {
 		const position = context.validateModelPosition(_position);
 		return this._fromModelCursorState(context, cursor, WordOperations.word(context.config, context.model, cursor.modelState, inSelectionMode, position));
 	}

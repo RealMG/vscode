@@ -49,6 +49,7 @@ import * as paths from 'vs/base/common/paths';
 import { realpath } from 'fs';
 import { MainContext, ExtHostContext, InstanceCollection, IInitData } from './extHost.protocol';
 import * as languageConfiguration from 'vs/editor/common/modes/languageConfiguration';
+import { TextEditorCursorStyle } from "vs/editor/common/config/editorOptions";
 
 export interface IExtensionApiFactory {
 	(extension: IExtensionDescription): typeof vscode;
@@ -117,7 +118,7 @@ export function createApiFactory(
 	const extHostFileSystemEvent = col.define(ExtHostContext.ExtHostFileSystemEventService).set<ExtHostFileSystemEventService>(new ExtHostFileSystemEventService());
 	const extHostQuickOpen = col.define(ExtHostContext.ExtHostQuickOpen).set<ExtHostQuickOpen>(new ExtHostQuickOpen(threadService));
 	const extHostTerminalService = col.define(ExtHostContext.ExtHostTerminalService).set<ExtHostTerminalService>(new ExtHostTerminalService(threadService));
-	const extHostSCM = col.define(ExtHostContext.ExtHostSCM).set<ExtHostSCM>(new ExtHostSCM(threadService));
+	const extHostSCM = col.define(ExtHostContext.ExtHostSCM).set<ExtHostSCM>(new ExtHostSCM(threadService, extHostCommands));
 	const extHostTask = col.define(ExtHostContext.ExtHostTask).set<ExtHostTask>(new ExtHostTask(threadService));
 	col.define(ExtHostContext.ExtHostExtensionService).set(extensionService);
 	col.finish(false, threadService);
@@ -346,9 +347,9 @@ export function createApiFactory(
 			withWindowProgress: proposedApiFunction(extension, <R>(title: string, task: (progress: vscode.Progress<string>, token: vscode.CancellationToken) => Thenable<R>): Thenable<R> => {
 				return extHostProgress.withWindowProgress(extension, title, task);
 			}),
-			withScmProgress: proposedApiFunction(extension, <R>(task: (progress: vscode.Progress<number>) => Thenable<R>) => {
+			withScmProgress<R>(task: (progress: vscode.Progress<number>) => Thenable<R>) {
 				return extHostProgress.withScmProgress(extension, task);
-			}),
+			},
 			createOutputChannel(name: string): vscode.OutputChannel {
 				return extHostOutputService.createOutputChannel(name);
 			},
@@ -448,30 +449,30 @@ export function createApiFactory(
 
 		class SCM {
 
-			get activeProvider() {
+			get activeSourceControl() {
 				return extHostSCM.activeProvider;
 			}
 
-			get onDidChangeActiveProvider() {
+			get onDidChangeActiveSourceControl() {
 				return extHostSCM.onDidChangeActiveProvider;
-			}
-
-			get onDidAcceptInputValue() {
-				return mapEvent(extHostSCM.inputBox.onDidAccept, () => extHostSCM.inputBox);
 			}
 
 			get inputBox() {
 				return extHostSCM.inputBox;
 			}
 
-			registerSCMProvider(provider: vscode.SCMProvider) {
+			get onDidAcceptInputValue() {
+				return mapEvent(extHostSCM.inputBox.onDidAccept, () => extHostSCM.inputBox);
+			}
+
+			createSourceControl(id: string, label: string) {
 				telemetryService.publicLog('registerSCMProvider', {
 					extensionId: extension.id,
-					providerLabel: provider.label,
-					providerContextKey: provider.contextKey
+					providerId: id,
+					providerLabel: label
 				});
 
-				return extHostSCM.registerSCMProvider(provider);
+				return extHostSCM.createSourceControl(id, label);
 			}
 		}
 
@@ -518,7 +519,7 @@ export function createApiFactory(
 			SymbolKind: extHostTypes.SymbolKind,
 			TextDocumentSaveReason: extHostTypes.TextDocumentSaveReason,
 			TextEdit: extHostTypes.TextEdit,
-			TextEditorCursorStyle: EditorCommon.TextEditorCursorStyle,
+			TextEditorCursorStyle: TextEditorCursorStyle,
 			TextEditorLineNumbersStyle: extHostTypes.TextEditorLineNumbersStyle,
 			TextEditorRevealType: extHostTypes.TextEditorRevealType,
 			TextEditorSelectionChangeKind: extHostTypes.TextEditorSelectionChangeKind,
@@ -529,6 +530,7 @@ export function createApiFactory(
 			FileLocationKind: extHostTypes.FileLocationKind,
 			ApplyToKind: extHostTypes.ApplyToKind,
 			RevealKind: extHostTypes.RevealKind,
+			TaskGroup: extHostTypes.TaskGroup,
 			ShellTask: extHostTypes.ShellTask,
 			ProcessTask: extHostTypes.ProcessTask
 		};

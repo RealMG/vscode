@@ -225,8 +225,7 @@ export class WorkbenchShell {
 		});
 
 		// Telemetry: startup metrics
-		const workbenchStarted = Date.now();
-		this.timerService.workbenchStarted = new Date(workbenchStarted);
+		this.timerService.workbenchStarted = Date.now();
 		this.timerService.restoreEditorsDuration = info.restoreEditorsDuration;
 		this.timerService.restoreViewletDuration = info.restoreViewletDuration;
 		this.extensionService.onReady().done(() => {
@@ -245,8 +244,7 @@ export class WorkbenchShell {
 		// Profiler: startup cpu profile
 		const { profileStartup } = this.environmentService;
 		if (profileStartup) {
-
-			stopProfiling(profileStartup.dir, profileStartup.prefix).then(() => {
+			this.extensionService.onReady().then(() => stopProfiling(profileStartup.dir, profileStartup.prefix)).then(() => {
 
 				readdir(profileStartup.dir).then(files => {
 					return files.filter(value => value.indexOf(profileStartup.prefix) === 0);
@@ -267,7 +265,7 @@ export class WorkbenchShell {
 						const action = this.workbench.getInstantiationService().createInstance(ReportPerformanceIssueAction, ReportPerformanceIssueAction.ID, ReportPerformanceIssueAction.LABEL);
 
 						createIssue = action.run(`:warning: Make sure to **attach** these files: :warning:\n${files.map(file => `-\`${join(profileStartup.dir, file)}\``).join('\n')}`).then(() => {
-							return this.windowsService.showItemInFolder(profileStartup.dir);
+							return this.windowsService.showItemInFolder(profileFiles[0]);
 						});
 					}
 					createIssue.then(() => this.windowsService.relaunch({ removeArgs: ['--prof-startup'] }));
@@ -372,7 +370,7 @@ export class WorkbenchShell {
 		this.threadService = instantiationService.createInstance(MainThreadService, extensionHostProcessWorker.messagingProtocol);
 		serviceCollection.set(IThreadService, this.threadService);
 
-		this.timerService.beforeExtensionLoad = new Date();
+		this.timerService.beforeExtensionLoad = Date.now();
 
 		// TODO@Joao: remove
 		const disabledExtensions = SCMPreview.enabled ? [] : ['vscode.git'];
@@ -380,7 +378,7 @@ export class WorkbenchShell {
 		serviceCollection.set(IExtensionService, this.extensionService);
 		extensionHostProcessWorker.start(this.extensionService);
 		this.extensionService.onReady().done(() => {
-			this.timerService.afterExtensionLoad = new Date();
+			this.timerService.afterExtensionLoad = Date.now();
 		});
 
 		this.themeService = instantiationService.createInstance(WorkbenchThemeService, document.body);
@@ -517,6 +515,23 @@ registerThemingParticipant((theme: ITheme, collector: ICssStyleCollector) => {
 	if (windowForeground) {
 		collector.addRule(`.monaco-shell { color: ${windowForeground}; }`);
 	}
+
+	// TODO@Ben the workbench background color is not really surfacing anywhere but on Windows
+	// not setting it will cause many part of the worbench to not use subpixel-antialiasing causing
+	// these parts to look fuzzy on higher resolution displays.
+	let workbenchBackground: string;
+	switch (theme.type) {
+		case 'dark':
+			workbenchBackground = '#252526';
+			break;
+		case 'light':
+			workbenchBackground = '#F3F3F3';
+			break;
+		default:
+			workbenchBackground = '#000000';
+	}
+
+	collector.addRule(`.monaco-workbench { background-color: ${workbenchBackground}; }`);
 
 	const focusOutline = theme.getColor(focus);
 	if (focusOutline) {
