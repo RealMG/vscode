@@ -3,12 +3,14 @@
  *  Licensed under the MIT License. See License.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
-import { IEnvironmentService, ParsedArgs } from 'vs/platform/environment/common/environment';
+import { IEnvironmentService, ParsedArgs, IDebugParams, IExtensionHostDebugParams } from 'vs/platform/environment/common/environment';
 import * as crypto from 'crypto';
 import * as paths from 'vs/base/node/paths';
 import * as os from 'os';
 import * as path from 'path';
+import * as fs from 'fs';
 import URI from 'vs/base/common/uri';
+import { generateUuid, isUUID } from 'vs/base/common/uuid';
 import { memoize } from 'vs/base/common/decorators';
 import pkg from 'vs/platform/node/package';
 import product from 'vs/platform/node/product';
@@ -48,6 +50,10 @@ function getIPCHandle(userDataPath: string, type: string): string {
 	} else {
 		return getNixIPCHandle(userDataPath, type);
 	}
+}
+
+export function getInstallSourcePath(userDataPath: string): string {
+	return path.join(userDataPath, 'installSource');
 }
 
 export class EnvironmentService implements IEnvironmentService {
@@ -90,7 +96,10 @@ export class EnvironmentService implements IEnvironmentService {
 	get backupWorkspacesPath(): string { return path.join(this.backupHome, 'workspaces.json'); }
 
 	@memoize
-	get extensionsPath(): string { return parsePathArg(this._args['extensions-dir'], process) || path.join(this.userHome, product.dataFolderName, 'extensions'); }
+	get workspacesHome(): string { return path.join(this.userDataPath, 'Workspaces'); }
+
+	@memoize
+	get extensionsPath(): string { return parsePathArg(this._args['extensions-dir'], process) || process.env['VSCODE_EXTENSIONS'] || path.join(this.userHome, product.dataFolderName, 'extensions'); }
 
 	@memoize
 	get extensionDevelopmentPath(): string { return this._args.extensionDevelopmentPath ? path.normalize(this._args.extensionDevelopmentPath) : this._args.extensionDevelopmentPath; }
@@ -100,8 +109,13 @@ export class EnvironmentService implements IEnvironmentService {
 
 	get disableExtensions(): boolean { return this._args['disable-extensions']; }
 
+	get skipGettingStarted(): boolean { return this._args['skip-getting-started']; }
+
 	@memoize
-	get debugExtensionHost(): { port: number; break: boolean; } { return parseExtensionHostPort(this._args, this.isBuilt); }
+	get debugExtensionHost(): IExtensionHostDebugParams { return parseExtensionHostPort(this._args, this.isBuilt); }
+
+	@memoize
+	get debugSearch(): IDebugParams { return parseSearchPort(this._args, this.isBuilt); }
 
 	get isBuilt(): boolean { return !process.env['VSCODE_DEV']; }
 	get verbose(): boolean { return this._args.verbose; }
@@ -131,14 +145,50 @@ export class EnvironmentService implements IEnvironmentService {
 	@memoize
 	get nodeCachedDataDir(): string { return this.isBuilt ? path.join(this.userDataPath, 'CachedData', product.commit) : undefined; }
 
-	constructor(private _args: ParsedArgs, private _execPath: string) { }
+	readonly machineUUID: string;
+
+	readonly installSource: string;
+
+	constructor(private _args: ParsedArgs, private _execPath: string) {
+		const machineIdPath = path.join(this.userDataPath, 'machineid');
+
+		try {
+			this.machineUUID = fs.readFileSync(machineIdPath, 'utf8');
+
+			if (!isUUID(this.machineUUID)) {
+				throw new Error('Not a UUID');
+			}
+		} catch (err) {
+			this.machineUUID = generateUuid();
+
+			try {
+				fs.writeFileSync(machineIdPath, this.machineUUID, 'utf8');
+			} catch (err) {
+				console.warn('Could not store machine ID');
+			}
+		}
+
+		try {
+			this.installSource = fs.readFileSync(getInstallSourcePath(this.userDataPath), 'utf8').slice(0, 30);
+		} catch (err) {
+			this.installSource = '';
+		}
+	}
 }
 
-export function parseExtensionHostPort(args: ParsedArgs, isBuild: boolean): { port: number; break: boolean; } {
-	const portStr = args.debugBrkPluginHost || args.debugPluginHost;
-	const port = Number(portStr) || (!isBuild ? 5870 : null);
-	const brk = port ? Boolean(!!args.debugBrkPluginHost) : false;
-	return { port, break: brk };
+export function parseExtensionHostPort(args: ParsedArgs, isBuild: boolean): IExtensionHostDebugParams {
+	return parseDebugPort(args.debugPluginHost, args.debugBrkPluginHost, 5870, isBuild, args.debugId);
+}
+
+export function parseSearchPort(args: ParsedArgs, isBuild: boolean): IDebugParams {
+	return parseDebugPort(args.debugSearch, args.debugBrkSearch, 5876, isBuild);
+}
+
+export function parseDebugPort(debugArg: string, debugBrkArg: string, defaultBuildPort: number, isBuild: boolean, debugId?: string): IExtensionHostDebugParams {
+	const portStr = debugBrkArg || debugArg;
+	const port = Number(portStr) || (!isBuild ? defaultBuildPort : null);
+	const brk = port ? Boolean(!!debugBrkArg) : false;
+	return { port, break: brk, debugId };
 }
 
 function parsePathArg(arg: string, process: NodeJS.Process): string {

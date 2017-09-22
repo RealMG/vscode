@@ -4,15 +4,20 @@
  *--------------------------------------------------------------------------------------------*/
 
 import * as nls from 'vs/nls';
+import * as path from 'path';
 import * as platform from 'vs/base/common/platform';
-import { IConfiguration as IEditorConfiguration, DefaultConfig } from 'vs/editor/common/config/defaultConfig';
+import { EDITOR_FONT_DEFAULTS, IEditorOptions } from 'vs/editor/common/config/editorOptions';
 import { IConfigurationService } from 'vs/platform/configuration/common/configuration';
 import { IWorkspaceConfigurationService } from 'vs/workbench/services/configuration/common/configuration';
 import { IChoiceService } from 'vs/platform/message/common/message';
-import { IStorageService, StorageScope } from "vs/platform/storage/common/storage";
+import { IStorageService, StorageScope } from 'vs/platform/storage/common/storage';
 import { ITerminalConfiguration, ITerminalConfigHelper, ITerminalFont, IShellLaunchConfig, IS_WORKSPACE_SHELL_ALLOWED_STORAGE_KEY } from 'vs/workbench/parts/terminal/common/terminal';
-import { Severity } from "vs/editor/common/standalone/standaloneBase";
 import { TPromise } from 'vs/base/common/winjs.base';
+import Severity from 'vs/base/common/severity';
+
+interface IEditorConfiguration {
+	editor: IEditorOptions;
+}
 
 interface IFullTerminalConfiguration {
 	terminal: {
@@ -20,7 +25,7 @@ interface IFullTerminalConfiguration {
 	};
 }
 
-const DEFAULT_LINE_HEIGHT = 1.2;
+const DEFAULT_LINE_HEIGHT = 1.0;
 
 /**
  * Encapsulates terminal configuration logic, the primary purpose of this file is so that platform
@@ -50,11 +55,12 @@ export class TerminalConfigHelper implements ITerminalConfigHelper {
 			this._charMeasureElement = document.createElement('div');
 			this.panelContainer.appendChild(this._charMeasureElement);
 		}
+		// TODO: This should leverage CharMeasure
 		const style = this._charMeasureElement.style;
 		style.display = 'block';
 		style.fontFamily = fontFamily;
 		style.fontSize = fontSize + 'px';
-		style.lineHeight = lineHeight.toString(10);
+		style.lineHeight = 'normal';
 		this._charMeasureElement.innerText = 'X';
 		const rect = this._charMeasureElement.getBoundingClientRect();
 		style.display = 'none';
@@ -66,10 +72,10 @@ export class TerminalConfigHelper implements ITerminalConfigHelper {
 
 		this._lastFontMeasurement = {
 			fontFamily,
-			fontSize: fontSize + 'px',
+			fontSize,
 			lineHeight,
 			charWidth: rect.width,
-			charHeight: rect.height
+			charHeight: Math.ceil(rect.height)
 		};
 		return this._lastFontMeasurement;
 	}
@@ -86,14 +92,15 @@ export class TerminalConfigHelper implements ITerminalConfigHelper {
 		const fontFamily = terminalConfig.fontFamily || editorConfig.fontFamily;
 		let fontSize = this._toInteger(terminalConfig.fontSize, 0);
 		if (fontSize <= 0) {
-			fontSize = DefaultConfig.editor.fontSize;
+			fontSize = EDITOR_FONT_DEFAULTS.fontSize;
 		}
-		let lineHeight = terminalConfig.lineHeight <= 0 ? DEFAULT_LINE_HEIGHT : terminalConfig.lineHeight;
-		if (!lineHeight) {
-			lineHeight = DEFAULT_LINE_HEIGHT;
-		}
+		const lineHeight = terminalConfig.lineHeight ? Math.max(terminalConfig.lineHeight, 1) : DEFAULT_LINE_HEIGHT;
 
 		return this._measureFont(fontFamily, fontSize, lineHeight);
+	}
+
+	public setWorkspaceShellAllowed(isAllowed: boolean): void {
+		this._storageService.store(IS_WORKSPACE_SHELL_ALLOWED_STORAGE_KEY, isAllowed, StorageScope.WORKSPACE);
 	}
 
 	public mergeDefaultShellPathAndArgs(shell: IShellLaunchConfig): void {
@@ -130,24 +137,30 @@ export class TerminalConfigHelper implements ITerminalConfigHelper {
 			} else { // if (shellArgsConfigValue.workspace !== undefined)
 				changeString = `shellArgs: ${argsString}`;
 			}
-			const message = nls.localize('terminal.integrated.allowWorkspaceShell', "This workspace wants to customize the terminal shell, do you want to allow it? ({0})", changeString);
-			const options = [nls.localize('allow', "Allow"), nls.localize('cancel', "Cancel"), nls.localize('disallow', "Disallow")];
-			this._choiceService.choose(Severity.Warning, message, options).then(choice => {
-				switch (choice) {
-					case 0:
-						this._storageService.store(IS_WORKSPACE_SHELL_ALLOWED_STORAGE_KEY, true, StorageScope.WORKSPACE);
-					case 1:
-						return TPromise.as(null);
-					case 2:
-						this._storageService.store(IS_WORKSPACE_SHELL_ALLOWED_STORAGE_KEY, false, StorageScope.WORKSPACE);
-					default:
-						return TPromise.as(null);
+			const message = nls.localize('terminal.integrated.allowWorkspaceShell', "Do you allow {0} (defined as a workspace setting) to be launched in the terminal?", changeString);
+			const options = [nls.localize('allow', "Allow"), nls.localize('disallow', "Disallow")];
+			this._choiceService.choose(Severity.Info, message, options, 1).then(choice => {
+				if (choice === 0) {
+					this._storageService.store(IS_WORKSPACE_SHELL_ALLOWED_STORAGE_KEY, true, StorageScope.WORKSPACE);
+				} else {
+					this._storageService.store(IS_WORKSPACE_SHELL_ALLOWED_STORAGE_KEY, false, StorageScope.WORKSPACE);
 				}
+				return TPromise.as(null);
 			});
 		}
 
 		shell.executable = (isWorkspaceShellAllowed ? shellConfigValue.value : shellConfigValue.user) || shellConfigValue.default;
 		shell.args = (isWorkspaceShellAllowed ? shellArgsConfigValue.value : shellArgsConfigValue.user) || shellArgsConfigValue.default;
+
+		// Change Sysnative to System32 if the OS is Windows but NOT WoW64. It's
+		// safe to assume that this was used by accident as Sysnative does not
+		// exist and will break the terminal in non-WoW64 environments.
+		if (platform.isWindows && !process.env.hasOwnProperty('PROCESSOR_ARCHITEW6432')) {
+			const sysnativePath = path.join(process.env.windir, 'Sysnative').toLowerCase();
+			if (shell.executable.toLowerCase().indexOf(sysnativePath) === 0) {
+				shell.executable = path.join(process.env.windir, 'System32', shell.executable.substr(sysnativePath.length));
+			}
+		}
 	}
 
 	private _toInteger(source: any, minimum?: number): number {

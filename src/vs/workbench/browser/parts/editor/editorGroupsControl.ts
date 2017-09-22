@@ -20,22 +20,26 @@ import { RunOnceScheduler } from 'vs/base/common/async';
 import { isMacintosh } from 'vs/base/common/platform';
 import { IWorkbenchEditorService } from 'vs/workbench/services/editor/common/editorService';
 import { Position, POSITIONS } from 'vs/platform/editor/common/editor';
-import { IEditorGroupService, ITabOptions, GroupArrangement, GroupOrientation } from 'vs/workbench/services/group/common/groupService';
+import { IEditorGroupService, IEditorTabOptions, GroupArrangement, GroupOrientation } from 'vs/workbench/services/group/common/groupService';
 import { ITelemetryService } from 'vs/platform/telemetry/common/telemetry';
 import { IInstantiationService } from 'vs/platform/instantiation/common/instantiation';
 import { ServiceCollection } from 'vs/platform/instantiation/common/serviceCollection';
 import { IContextKeyService } from 'vs/platform/contextkey/common/contextkey';
 import { IExtensionService } from 'vs/platform/extensions/common/extensions';
 import { TabsTitleControl } from 'vs/workbench/browser/parts/editor/tabsTitleControl';
-import { TitleControl, ITitleAreaControl } from 'vs/workbench/browser/parts/editor/titleControl';
+import { TitleControl, ITitleAreaControl, handleWorkspaceExternalDrop } from 'vs/workbench/browser/parts/editor/titleControl';
 import { NoTabsTitleControl } from 'vs/workbench/browser/parts/editor/noTabsTitleControl';
 import { IEditorStacksModel, IStacksModelChangeEvent, IEditorGroup, EditorOptions, TextEditorOptions, IEditorIdentifier } from 'vs/workbench/common/editor';
 import { extractResources } from 'vs/base/browser/dnd';
-import { IWindowService } from 'vs/platform/windows/common/windows';
+import { IWindowService, IWindowsService } from 'vs/platform/windows/common/windows';
 import { getCodeEditor } from 'vs/editor/common/services/codeEditorService';
 import { IThemeService } from 'vs/platform/theme/common/themeService';
-import { editorBackground, highContrastBorder, highContrastOutline } from 'vs/platform/theme/common/colorRegistry';
-import { Themable, TABS_CONTAINER_BACKGROUND, EDITOR_HEADER_BACKGROUND, EDITOR_GROUP_BORDER_COLOR, EDITOR_DRAG_AND_DROP_BACKGROUND, EDITOR_GROUP_BACKGROUND } from 'vs/workbench/common/theme';
+import { editorBackground, contrastBorder, activeContrastBorder } from 'vs/platform/theme/common/colorRegistry';
+import { Themable, EDITOR_GROUP_HEADER_TABS_BACKGROUND, EDITOR_GROUP_HEADER_NO_TABS_BACKGROUND, EDITOR_GROUP_BORDER, EDITOR_DRAG_AND_DROP_BACKGROUND, EDITOR_GROUP_BACKGROUND, EDITOR_GROUP_HEADER_TABS_BORDER } from 'vs/workbench/common/theme';
+import { attachProgressBarStyler } from 'vs/platform/theme/common/styler';
+import { IMessageService } from 'vs/platform/message/common/message';
+import { IFileService } from 'vs/platform/files/common/files';
+import { IWorkspacesService } from 'vs/platform/workspaces/common/workspaces';
 
 export enum Rochade {
 	NONE,
@@ -111,7 +115,7 @@ export class EditorGroupsControl extends Themable implements IEditorGroupsContro
 
 	private layoutVertically: boolean;
 
-	private tabOptions: ITabOptions;
+	private tabOptions: IEditorTabOptions;
 
 	private silos: Builder[];
 	private silosSize: number[];
@@ -146,7 +150,11 @@ export class EditorGroupsControl extends Themable implements IEditorGroupsContro
 		@IExtensionService private extensionService: IExtensionService,
 		@IInstantiationService private instantiationService: IInstantiationService,
 		@IWindowService private windowService: IWindowService,
-		@IThemeService themeService: IThemeService
+		@IWindowsService private windowsService: IWindowsService,
+		@IThemeService themeService: IThemeService,
+		@IFileService private fileService: IFileService,
+		@IMessageService private messageService: IMessageService,
+		@IWorkspacesService private workspacesService: IWorkspacesService
 	) {
 		super(themeService);
 
@@ -217,7 +225,7 @@ export class EditorGroupsControl extends Themable implements IEditorGroupsContro
 		this.extensionService.onReady().then(() => this.onExtensionsReady());
 	}
 
-	private updateTabOptions(tabOptions: ITabOptions, refresh?: boolean): void {
+	private updateTabOptions(tabOptions: IEditorTabOptions, refresh?: boolean): void {
 		const tabCloseButton = this.tabOptions ? this.tabOptions.tabCloseButton : 'right';
 		this.tabOptions = tabOptions;
 
@@ -449,7 +457,7 @@ export class EditorGroupsControl extends Themable implements IEditorGroupsContro
 					}
 				});
 
-				// Grow focussed position if there is more size to spend
+				// Grow focused position if there is more size to spend
 				if (remainingSize > this.minSize) {
 					this.silosSize[this.lastActivePosition] = remainingSize;
 
@@ -480,7 +488,7 @@ export class EditorGroupsControl extends Themable implements IEditorGroupsContro
 
 	private focusNextNonMinimized(): void {
 
-		// If the current focussed editor is minimized, try to focus the next largest editor
+		// If the current focused editor is minimized, try to focus the next largest editor
 		if (!types.isUndefinedOrNull(this.lastActivePosition) && this.silosMinimized[this.lastActivePosition]) {
 			let candidate: Position = null;
 			let currentSize = this.minSize;
@@ -991,6 +999,7 @@ export class EditorGroupsControl extends Themable implements IEditorGroupsContro
 
 			// Progress Bar
 			const progressBar = new ProgressBar($(container));
+			this.toUnbind.push(attachProgressBarStyler(progressBar, this.themeService));
 			progressBar.getContainer().hide();
 			container.setProperty(EditorGroupsControl.PROGRESS_BAR_CONTROL_KEY, progressBar); // associate with container
 		});
@@ -1009,18 +1018,19 @@ export class EditorGroupsControl extends Themable implements IEditorGroupsContro
 			silo.style('background-color', this.getColor(editorBackground));
 
 			// Border
-			silo.style('border-left-color', index > Position.ONE ? this.getColor(EDITOR_GROUP_BORDER_COLOR) : null);
-			silo.style('border-top-color', index > Position.ONE ? this.getColor(EDITOR_GROUP_BORDER_COLOR) : null);
+			silo.style('border-left-color', index > Position.ONE ? (this.getColor(EDITOR_GROUP_BORDER) || this.getColor(contrastBorder)) : null);
+			silo.style('border-top-color', index > Position.ONE ? (this.getColor(EDITOR_GROUP_BORDER) || this.getColor(contrastBorder)) : null);
 		});
 
 		// Title control
 		POSITIONS.forEach(position => {
 			const container = this.getTitleAreaControl(position).getContainer();
+			const borderColor = this.getColor(EDITOR_GROUP_HEADER_TABS_BORDER) || this.getColor(contrastBorder);
 
-			container.style.backgroundColor = this.getColor(this.tabOptions.showTabs ? TABS_CONTAINER_BACKGROUND : EDITOR_HEADER_BACKGROUND);
-			container.style.borderBottomWidth = (this.isHighContrastTheme && this.tabOptions.showTabs) ? '1px' : null;
-			container.style.borderBottomStyle = (this.isHighContrastTheme && this.tabOptions.showTabs) ? 'solid' : null;
-			container.style.borderBottomColor = (this.isHighContrastTheme && this.tabOptions.showTabs) ? this.getColor(highContrastBorder) : null;
+			container.style.backgroundColor = this.getColor(this.tabOptions.showTabs ? EDITOR_GROUP_HEADER_TABS_BACKGROUND : EDITOR_GROUP_HEADER_NO_TABS_BACKGROUND);
+			container.style.borderBottomWidth = (borderColor && this.tabOptions.showTabs) ? '1px' : null;
+			container.style.borderBottomStyle = (borderColor && this.tabOptions.showTabs) ? 'solid' : null;
+			container.style.borderBottomColor = this.tabOptions.showTabs ? borderColor : null;
 		});
 	}
 
@@ -1051,8 +1061,7 @@ export class EditorGroupsControl extends Themable implements IEditorGroupsContro
 			const activeEditor = $this.editorService.getActiveEditor();
 			const editor = getCodeEditor(activeEditor);
 			if (editor && activeEditor.position === stacks.positionOfGroup(identifier.group) && identifier.editor.matches(activeEditor.input)) {
-				options = TextEditorOptions.create({ pinned: true });
-				(<TextEditorOptions>options).fromEditor(editor);
+				options = TextEditorOptions.fromEditor(editor, { pinned: true });
 			}
 
 			return options;
@@ -1111,29 +1120,33 @@ export class EditorGroupsControl extends Themable implements IEditorGroupsContro
 			else {
 				const droppedResources = extractResources(e).filter(r => r.resource.scheme === 'file' || r.resource.scheme === 'untitled');
 				if (droppedResources.length) {
+					handleWorkspaceExternalDrop(droppedResources, $this.fileService, $this.messageService, $this.windowsService, $this.windowService, $this.workspacesService).then(handled => {
+						if (handled) {
+							return;
+						}
 
-					// Add external ones to recently open list
-					const externalResources = droppedResources.filter(d => d.isExternal).map(d => d.resource);
-					if (externalResources.length) {
-						$this.windowService.addToRecentlyOpen(externalResources.map(resource => {
-							return {
-								path: resource.fsPath,
-								isFile: true
-							};
-						}));
-					}
+						// Add external ones to recently open list
+						const externalResources = droppedResources.filter(d => d.isExternal).map(d => d.resource);
+						if (externalResources.length) {
+							$this.windowsService.addRecentlyOpened(externalResources.map(resource => resource.fsPath));
+						}
 
-					// Open in Editor
-					$this.windowService.focusWindow()
-						.then(() => editorService.openEditors(droppedResources.map(d => { return { input: { resource: d.resource, options: { pinned: true } }, position: splitEditor ? freeGroup : position }; })))
-						.then(() => {
-							if (splitEditor && splitTo !== freeGroup) {
-								groupService.moveGroup(freeGroup, splitTo);
-							}
+						// Open in Editor
+						$this.windowService.focusWindow()
+							.then(() => editorService.openEditors(droppedResources.map(d => {
+								return {
+									input: { resource: d.resource, options: { pinned: true } },
+									position: splitEditor ? freeGroup : position
+								};
+							}))).then(() => {
+								if (splitEditor && splitTo !== freeGroup) {
+									groupService.moveGroup(freeGroup, splitTo);
+								}
 
-							groupService.focusGroup(splitEditor ? splitTo : position);
-						})
-						.done(null, errors.onUnexpectedError);
+								groupService.focusGroup(splitEditor ? splitTo : position);
+							})
+							.done(null, errors.onUnexpectedError);
+					});
 				}
 			}
 		}
@@ -1225,15 +1238,15 @@ export class EditorGroupsControl extends Themable implements IEditorGroupsContro
 				const containers = $this.visibleEditors.filter(e => !!e).map(e => e.getContainer());
 				containers.forEach((container, index) => {
 					if (container && DOM.isAncestor(target, container.getHTMLElement())) {
-						const useOutline = $this.isHighContrastTheme;
+						const activeContrastBorderColor = $this.getColor(activeContrastBorder);
 						overlay = $('div').style({
 							top: $this.tabOptions.showTabs ? `${EditorGroupsControl.EDITOR_TITLE_HEIGHT}px` : 0,
 							height: $this.tabOptions.showTabs ? `calc(100% - ${EditorGroupsControl.EDITOR_TITLE_HEIGHT}px` : '100%',
 							backgroundColor: $this.getColor(EDITOR_DRAG_AND_DROP_BACKGROUND),
-							outlineColor: useOutline ? $this.getColor(highContrastOutline) : null,
-							outlineOffset: useOutline ? '-2px' : null,
-							outlineStyle: useOutline ? 'dashed' : null,
-							outlineWidth: useOutline ? '2px' : null
+							outlineColor: activeContrastBorderColor,
+							outlineOffset: activeContrastBorderColor ? '-2px' : null,
+							outlineStyle: activeContrastBorderColor ? 'dashed' : null,
+							outlineWidth: activeContrastBorderColor ? '2px' : null
 						}).id(overlayId);
 
 						overlay.appendTo(container);
@@ -1244,6 +1257,13 @@ export class EditorGroupsControl extends Themable implements IEditorGroupsContro
 						});
 
 						overlay.on(DOM.EventType.DRAG_OVER, (e: DragEvent) => {
+
+							// update the dropEffect, otherwise it would look like a "move" operation. but only if we are
+							// not dragging a tab actually because there we support both moving as well as copying
+							if (!TabsTitleControl.getDraggedEditor()) {
+								e.dataTransfer.dropEffect = 'copy';
+							}
+
 							positionOverlay(e, containers.length, index);
 						});
 
@@ -1281,8 +1301,14 @@ export class EditorGroupsControl extends Themable implements IEditorGroupsContro
 		// Drag enter
 		let counter = 0; // see https://github.com/Microsoft/vscode/issues/14470
 		this.toUnbind.push(DOM.addDisposableListener(node, DOM.EventType.DRAG_ENTER, (e: DragEvent) => {
-			if (!TitleControl.getDraggedEditor() && !extractResources(e).length) {
-				return; // invalid DND
+			if (!TitleControl.getDraggedEditor()) {
+				// we used to check for the dragged resources here (via dnd.extractResources()) but this
+				// seems to be not possible on Linux and Windows where during DRAG_ENTER the resources
+				// are always undefined up until they are dropped when dragged from the tree. The workaround
+				// is to check for a datatransfer type being set. See https://github.com/Microsoft/vscode/issues/25789
+				if (!e.dataTransfer.types.length) {
+					return; // invalid DND
+				}
 			}
 
 			counter++;
@@ -1548,7 +1574,7 @@ export class EditorGroupsControl extends Themable implements IEditorGroupsContro
 		if (isDragging) {
 			this.parent.addClass('dragging');
 			silo.addClass('dragging');
-			borderColor = this.getColor(EDITOR_GROUP_BORDER_COLOR);
+			borderColor = this.getColor(EDITOR_GROUP_BORDER) || this.getColor(contrastBorder);
 		} else {
 			this.parent.removeClass('dragging');
 			silo.removeClass('dragging');
@@ -1568,11 +1594,11 @@ export class EditorGroupsControl extends Themable implements IEditorGroupsContro
 		const background = this.getColor(isDropping ? EDITOR_DRAG_AND_DROP_BACKGROUND : groupCount > 0 ? EDITOR_GROUP_BACKGROUND : null);
 		element.style.backgroundColor = background;
 
-		const useOutline = this.isHighContrastTheme && isDropping;
-		element.style.outlineColor = useOutline ? this.getColor(highContrastOutline) : null;
-		element.style.outlineStyle = useOutline ? 'dashed' : null;
-		element.style.outlineWidth = useOutline ? '2px' : null;
-		element.style.outlineOffset = useOutline ? '-2px' : null;
+		const activeContrastBorderColor = this.getColor(activeContrastBorder);
+		element.style.outlineColor = isDropping ? activeContrastBorderColor : null;
+		element.style.outlineStyle = isDropping && activeContrastBorderColor ? 'dashed' : null;
+		element.style.outlineWidth = isDropping && activeContrastBorderColor ? '2px' : null;
+		element.style.outlineOffset = isDropping && activeContrastBorderColor ? '-2px' : null;
 	}
 
 	private posSilo(pos: number, leftTop: string | number, rightBottom?: string | number, borderLeftTopWidth?: string | number): void {

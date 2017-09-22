@@ -14,8 +14,8 @@ import _ = require('vs/base/parts/tree/browser/tree');
 import { INavigator, MappedNavigator } from 'vs/base/common/iterator';
 import Event, { Emitter } from 'vs/base/common/event';
 import Lifecycle = require('vs/base/common/lifecycle');
-import { Color } from "vs/base/common/color";
-import { mixin } from "vs/base/common/objects";
+import { Color } from 'vs/base/common/color';
+import { mixin } from 'vs/base/common/objects';
 
 export class TreeContext implements _.ITreeContext {
 
@@ -41,7 +41,7 @@ export class TreeContext implements _.ITreeContext {
 		}
 
 		this.dataSource = configuration.dataSource;
-		this.renderer = configuration.renderer || new TreeDefaults.LegacyRenderer();
+		this.renderer = configuration.renderer;
 		this.controller = configuration.controller || new TreeDefaults.DefaultController({ clickBehavior: TreeDefaults.ClickBehavior.ON_MOUSE_UP, keyboardSupport: typeof options.keyboardSupport !== 'boolean' || options.keyboardSupport });
 		this.dnd = configuration.dnd || new TreeDefaults.DefaultDragAndDrop();
 		this.filter = configuration.filter || new TreeDefaults.DefaultFilter();
@@ -170,10 +170,6 @@ export class Tree extends Events.EventEmitter implements _.ITree {
 		return this.model.refresh(element, recursive);
 	}
 
-	public refreshAll(elements: any[], recursive = true): WinJS.Promise {
-		return this.model.refreshAll(elements, recursive);
-	}
-
 	public expand(element: any): WinJS.Promise {
 		return this.model.expand(element);
 	}
@@ -190,8 +186,8 @@ export class Tree extends Events.EventEmitter implements _.ITree {
 		return this.model.collapseAll(elements, recursive);
 	}
 
-	public toggleExpansion(element: any): WinJS.Promise {
-		return this.model.toggleExpansion(element);
+	public toggleExpansion(element: any, recursive: boolean = false): WinJS.Promise {
+		return this.model.toggleExpansion(element, recursive);
 	}
 
 	public toggleExpansionAll(elements: any[]): WinJS.Promise {
@@ -327,16 +323,16 @@ export class Tree extends Events.EventEmitter implements _.ITree {
 		this.model.focusFirstChild(eventPayload);
 	}
 
-	public focusFirst(eventPayload?: any): void {
-		this.model.focusFirst(eventPayload);
+	public focusFirst(eventPayload?: any, from?: any): void {
+		this.model.focusFirst(eventPayload, from);
 	}
 
 	public focusNth(index: number, eventPayload?: any): void {
 		this.model.focusNth(index, eventPayload);
 	}
 
-	public focusLast(eventPayload?: any): void {
-		this.model.focusLast(eventPayload);
+	public focusLast(eventPayload?: any, from?: any): void {
+		this.model.focusLast(eventPayload, from);
 	}
 
 	public focusNextPage(eventPayload?: any): void {

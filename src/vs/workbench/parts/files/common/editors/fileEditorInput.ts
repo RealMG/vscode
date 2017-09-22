@@ -6,13 +6,15 @@
 
 import { localize } from 'vs/nls';
 import { TPromise } from 'vs/base/common/winjs.base';
+import { memoize } from 'vs/base/common/decorators';
 import paths = require('vs/base/common/paths');
+import resources = require('vs/base/common/resources');
 import labels = require('vs/base/common/labels');
 import URI from 'vs/base/common/uri';
-import { EncodingMode, ConfirmResult, EditorInput, IFileEditorInput } from 'vs/workbench/common/editor';
+import { EncodingMode, ConfirmResult, EditorInput, IFileEditorInput, ITextEditorModel } from 'vs/workbench/common/editor';
 import { TextFileEditorModel } from 'vs/workbench/services/textfile/common/textFileEditorModel';
 import { BinaryEditorModel } from 'vs/workbench/common/editor/binaryEditorModel';
-import { IFileOperationResult, FileOperationResult } from 'vs/platform/files/common/files';
+import { FileOperationError, FileOperationResult } from 'vs/platform/files/common/files';
 import { BINARY_FILE_EDITOR_ID, TEXT_FILE_EDITOR_ID, FILE_EDITOR_INPUT_ID } from 'vs/workbench/parts/files/common/files';
 import { ITextFileService, AutoSaveMode, ModelState, TextFileModelChangeEvent } from 'vs/workbench/services/textfile/common/textfiles';
 import { IWorkspaceContextService } from 'vs/platform/workspace/common/workspace';
@@ -21,24 +23,17 @@ import { IDisposable, dispose, IReference } from 'vs/base/common/lifecycle';
 import { telemetryURIDescriptor } from 'vs/platform/telemetry/common/telemetryUtils';
 import { Verbosity } from 'vs/platform/editor/common/editor';
 import { IEnvironmentService } from 'vs/platform/environment/common/environment';
-import { ITextModelResolverService } from "vs/editor/common/services/resolverService";
+import { ITextModelService } from 'vs/editor/common/services/resolverService';
 
 /**
  * A file editor input is the input type for the file editor of file system resources.
  */
 export class FileEditorInput extends EditorInput implements IFileEditorInput {
-	private resource: URI;
-	private preferredEncoding: string;
 	private forceOpenAsBinary: boolean;
 
-	private textModelReference: TPromise<IReference<TextFileEditorModel>>;
+	private textModelReference: TPromise<IReference<ITextEditorModel>>;
 
 	private name: string;
-	private description: string;
-
-	private shortTitle: string;
-	private mediumTitle: string;
-	private longTitle: string;
 
 	private toUnbind: IDisposable[];
 
@@ -46,20 +41,17 @@ export class FileEditorInput extends EditorInput implements IFileEditorInput {
 	 * An editor input who's contents are retrieved from file services.
 	 */
 	constructor(
-		resource: URI,
-		preferredEncoding: string,
+		private resource: URI,
+		private preferredEncoding: string,
 		@IInstantiationService private instantiationService: IInstantiationService,
 		@IWorkspaceContextService private contextService: IWorkspaceContextService,
 		@ITextFileService private textFileService: ITextFileService,
 		@IEnvironmentService private environmentService: IEnvironmentService,
-		@ITextModelResolverService private textModelResolverService: ITextModelResolverService
+		@ITextModelService private textModelResolverService: ITextModelService
 	) {
 		super();
 
 		this.toUnbind = [];
-
-		this.resource = resource;
-		this.preferredEncoding = preferredEncoding;
 
 		this.registerListeners();
 	}
@@ -126,31 +118,72 @@ export class FileEditorInput extends EditorInput implements IFileEditorInput {
 
 	public getName(): string {
 		if (!this.name) {
-			this.name = paths.basename(this.resource.fsPath);
+			this.name = resources.basenameOrAuthority(this.resource);
 		}
 
 		return this.decorateOrphanedFiles(this.name);
 	}
 
-	public getDescription(): string {
-		if (!this.description) {
-			this.description = labels.getPathLabel(paths.dirname(this.resource.fsPath), this.contextService, this.environmentService);
+	@memoize
+	private get shortDescription(): string {
+
+		return paths.basename(labels.getPathLabel(resources.dirname(this.resource), void 0, this.environmentService));
+	}
+
+	@memoize
+	private get mediumDescription(): string {
+		return labels.getPathLabel(resources.dirname(this.resource), this.contextService, this.environmentService);
+	}
+
+	@memoize
+	private get longDescription(): string {
+		return labels.getPathLabel(resources.dirname(this.resource), void 0, this.environmentService);
+	}
+
+	public getDescription(verbosity: Verbosity = Verbosity.MEDIUM): string {
+		let description: string;
+		switch (verbosity) {
+			case Verbosity.SHORT:
+				description = this.shortDescription;
+				break;
+			case Verbosity.LONG:
+				description = this.longDescription;
+				break;
+			case Verbosity.MEDIUM:
+			default:
+				description = this.mediumDescription;
+				break;
 		}
 
-		return this.description;
+		return description;
+	}
+
+	@memoize
+	private get shortTitle(): string {
+		return this.getName();
+	}
+
+	@memoize
+	private get mediumTitle(): string {
+		return labels.getPathLabel(this.resource, this.contextService, this.environmentService);
+	}
+
+	@memoize
+	private get longTitle(): string {
+		return labels.getPathLabel(this.resource, void 0, this.environmentService);
 	}
 
 	public getTitle(verbosity: Verbosity): string {
 		let title: string;
 		switch (verbosity) {
 			case Verbosity.SHORT:
-				title = this.shortTitle ? this.shortTitle : (this.shortTitle = this.getName());
+				title = this.shortTitle;
 				break;
 			case Verbosity.MEDIUM:
-				title = this.mediumTitle ? this.mediumTitle : (this.mediumTitle = labels.getPathLabel(this.resource, this.contextService, this.environmentService));
+				title = this.mediumTitle;
 				break;
 			case Verbosity.LONG:
-				title = this.longTitle ? this.longTitle : (this.longTitle = labels.getPathLabel(this.resource, void 0, this.environmentService));
+				title = this.longTitle;
 				break;
 		}
 
@@ -217,11 +250,11 @@ export class FileEditorInput extends EditorInput implements IFileEditorInput {
 				this.textModelReference = this.textModelResolverService.createModelReference(this.resource);
 			}
 
-			return this.textModelReference.then(ref => ref.object);
+			return this.textModelReference.then(ref => ref.object as TextFileEditorModel);
 		}, error => {
 
 			// In case of an error that indicates that the file is binary or too large, just return with the binary editor model
-			if ((<IFileOperationResult>error).fileOperationResult === FileOperationResult.FILE_IS_BINARY || (<IFileOperationResult>error).fileOperationResult === FileOperationResult.FILE_TOO_LARGE) {
+			if ((<FileOperationError>error).fileOperationResult === FileOperationResult.FILE_IS_BINARY || (<FileOperationError>error).fileOperationResult === FileOperationResult.FILE_TOO_LARGE) {
 				return this.resolveAsBinary();
 			}
 
@@ -231,7 +264,9 @@ export class FileEditorInput extends EditorInput implements IFileEditorInput {
 	}
 
 	private resolveAsBinary(): TPromise<BinaryEditorModel> {
-		return this.instantiationService.createInstance(BinaryEditorModel, this.resource, this.getName()).load();
+		return this.instantiationService.createInstance(BinaryEditorModel, this.resource, this.getName())
+			.load()
+			.then(x => x as BinaryEditorModel);
 	}
 
 	public isResolved(): boolean {

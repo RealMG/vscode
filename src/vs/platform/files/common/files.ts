@@ -12,7 +12,9 @@ import events = require('vs/base/common/events');
 import { isLinux } from 'vs/base/common/platform';
 import { createDecorator } from 'vs/platform/instantiation/common/instantiation';
 import Event from 'vs/base/common/event';
-import { equalsIgnoreCase, beginsWithIgnoreCase } from 'vs/base/common/strings';
+import { beginsWithIgnoreCase } from 'vs/base/common/strings';
+import { IProgress } from 'vs/platform/progress/common/progress';
+import { IDisposable } from 'vs/base/common/lifecycle';
 
 export const IFileService = createDecorator<IFileService>('fileService');
 
@@ -31,6 +33,13 @@ export interface IFileService {
 	onAfterOperation: Event<FileOperationEvent>;
 
 	/**
+	 *
+	 */
+	registerProvider?(authority: string, provider: IFileSystemProvider): IDisposable;
+
+	supportResource?(resource: URI): boolean;
+
+	/**
 	 * Resolve the properties of a file identified by the resource.
 	 *
 	 * If the optional parameter "resolveTo" is specified in options, the stat service is asked
@@ -42,6 +51,12 @@ export interface IFileService {
 	 * contain a single element.
 	 */
 	resolveFile(resource: URI, options?: IResolveFileOptions): TPromise<IFileStat>;
+
+	/**
+	 * Same as resolveFile but supports resolving mulitple resources in parallel.
+	 * If one of the resolve targets fails to resolve returns a fake IFileStat instead of making the whole call fail.
+	 */
+	resolveFiles(toResolve: { resource: URI, options?: IResolveFileOptions }[]): TPromise<IResolveFileResult[]>;
 
 	/**
 	 *Finds out if a file identified by the resource exists.
@@ -61,11 +76,6 @@ export interface IFileService {
 	 * The returned object contains properties of the file and the value as a readable stream.
 	 */
 	resolveStreamContent(resource: URI, options?: IResolveContentOptions): TPromise<IStreamContent>;
-
-	/**
-	 * Returns the contents of all files by the given array of file resources.
-	 */
-	resolveContents(resources: URI[]): TPromise<IContent[]>;
 
 	/**
 	 * Updates the content replacing its previous value.
@@ -92,7 +102,7 @@ export interface IFileService {
 	 *
 	 * The optional parameter content can be used as value to fill into the new file.
 	 */
-	createFile(resource: URI, content?: string): TPromise<IFileStat>;
+	createFile(resource: URI, content?: string, options?: ICreateFileOptions): TPromise<IFileStat>;
 
 	/**
 	 * Creates a new folder with the given path. The returned promise
@@ -132,12 +142,11 @@ export interface IFileService {
 	 * Allows to stop a watcher on the provided resource or absolute fs path.
 	 */
 	unwatchFileChanges(resource: URI): void;
-	unwatchFileChanges(fsPath: string): void;
 
 	/**
 	 * Configures the file service with the provided options.
 	 */
-	updateOptions(options: any): void;
+	updateOptions(options: object): void;
 
 	/**
 	 * Returns the preferred encoding to use for a given resource.
@@ -149,6 +158,37 @@ export interface IFileService {
 	 */
 	dispose(): void;
 }
+
+
+export enum FileType {
+	File = 0,
+	Dir = 1,
+	Symlink = 2
+}
+export interface IStat {
+	id: number | string;
+	mtime: number;
+	size: number;
+	type: FileType;
+}
+
+export interface IFileSystemProvider {
+
+	onDidChange?: Event<IFileChange[]>;
+
+	// more...
+	//
+	utimes(resource: URI, mtime: number): TPromise<IStat>;
+	stat(resource: URI): TPromise<IStat>;
+	read(resource: URI, offset: number, count: number, progress: IProgress<Uint8Array>): TPromise<number>;
+	write(resource: URI, content: Uint8Array): TPromise<void>;
+	move(from: URI, to: URI): TPromise<IStat>;
+	mkdir(resource: URI): TPromise<IStat>;
+	readdir(resource: URI): TPromise<[URI, IStat][]>;
+	rmdir(resource: URI): TPromise<void>;
+	unlink(resource: URI): TPromise<void>;
+}
+
 
 export enum FileOperation {
 	CREATE,
@@ -191,7 +231,7 @@ export enum FileChangeType {
 export interface IFileChange {
 
 	/**
-	 * The type of change that occured to the file.
+	 * The type of change that occurred to the file.
 	 */
 	type: FileChangeType;
 
@@ -231,10 +271,10 @@ export class FileChangesEvent extends events.Event {
 
 			// For deleted also return true when deleted folder is parent of target path
 			if (type === FileChangeType.DELETED) {
-				return isEqualOrParent(resource.fsPath, change.resource.fsPath, !isLinux /* ignorecase */);
+				return paths.isEqualOrParent(resource.fsPath, change.resource.fsPath, !isLinux /* ignorecase */);
 			}
 
-			return isEqual(resource.fsPath, change.resource.fsPath, !isLinux /* ignorecase */);
+			return paths.isEqual(resource.fsPath, change.resource.fsPath, !isLinux /* ignorecase */);
 		});
 	}
 
@@ -291,19 +331,6 @@ export class FileChangesEvent extends events.Event {
 	}
 }
 
-export function isEqual(pathA: string, pathB: string, ignoreCase?: boolean): boolean {
-	const identityEquals = (pathA === pathB);
-	if (!ignoreCase || identityEquals) {
-		return identityEquals;
-	}
-
-	if (!pathA || !pathB) {
-		return false;
-	}
-
-	return equalsIgnoreCase(pathA, pathB);
-}
-
 export function isParent(path: string, candidate: string, ignoreCase?: boolean): boolean {
 	if (!path || !candidate || path === candidate) {
 		return false;
@@ -324,43 +351,7 @@ export function isParent(path: string, candidate: string, ignoreCase?: boolean):
 	return path.indexOf(candidate) === 0;
 }
 
-export function isEqualOrParent(path: string, candidate: string, ignoreCase?: boolean): boolean {
-	if (path === candidate) {
-		return true;
-	}
 
-	if (!path || !candidate) {
-		return false;
-	}
-
-	if (candidate.length > path.length) {
-		return false;
-	}
-
-	if (ignoreCase) {
-		const beginsWith = beginsWithIgnoreCase(path, candidate);
-		if (!beginsWith) {
-			return false;
-		}
-
-		if (candidate.length === path.length) {
-			return true; // same path, different casing
-		}
-
-		let sepOffset = candidate.length;
-		if (candidate.charAt(candidate.length - 1) === paths.nativeSep) {
-			sepOffset--; // adjust the expected sep offset in case our candidate already ends in separator character
-		}
-
-		return path.charAt(sepOffset) === paths.nativeSep;
-	}
-
-	if (candidate.charAt(candidate.length - 1) !== paths.nativeSep) {
-		candidate += paths.nativeSep;
-	}
-
-	return path.indexOf(candidate) === 0;
-}
 
 export function indexOf(path: string, candidate: string, ignoreCase?: boolean): number {
 	if (candidate.length > path.length) {
@@ -411,7 +402,7 @@ export interface IBaseStat {
 export interface IFileStat extends IBaseStat {
 
 	/**
-	 * The resource is a directory. Iff {{true}}
+	 * The resource is a directory. if {{true}}
 	 * {{encoding}} has no meaning.
 	 */
 	isDirectory: boolean;
@@ -431,6 +422,11 @@ export interface IFileStat extends IBaseStat {
 	 * The size of the file if known.
 	 */
 	size?: number;
+}
+
+export interface IResolveFileResult {
+	stat: IFileStat;
+	success: boolean;
 }
 
 /**
@@ -535,14 +531,24 @@ export interface IResolveFileOptions {
 	resolveSingleChildDescendants?: boolean;
 }
 
+export interface ICreateFileOptions {
+
+	/**
+	 * Overwrite the file to create if it already exists on disk. Otherwise
+	 * an error will be thrown (FILE_MODIFIED_SINCE).
+	 */
+	overwrite?: boolean;
+}
+
 export interface IImportResult {
 	stat: IFileStat;
 	isNew: boolean;
 }
 
-export interface IFileOperationResult {
-	message: string;
-	fileOperationResult: FileOperationResult;
+export class FileOperationError extends Error {
+	constructor(message: string, public fileOperationResult: FileOperationResult) {
+		super(message);
+	}
 }
 
 export enum FileOperationResult {
@@ -557,7 +563,11 @@ export enum FileOperationResult {
 	FILE_INVALID_PATH
 }
 
-export const MAX_FILE_SIZE = 50 * 1024 * 1024;
+// See https://github.com/Microsoft/vscode/issues/30180
+const WIN32_MAX_FILE_SIZE = 300 * 1024 * 1024; // 300 MB
+const GENERAL_MAX_FILE_SIZE = 16 * 1024 * 1024 * 1024; // 16 GB
+
+export const MAX_FILE_SIZE = (typeof process === 'object' ? (process.arch === 'ia32' ? WIN32_MAX_FILE_SIZE : GENERAL_MAX_FILE_SIZE) : WIN32_MAX_FILE_SIZE);
 
 export const AutoSaveConfiguration = {
 	OFF: 'off',
@@ -587,6 +597,7 @@ export interface IFilesConfiguration {
 		autoSaveDelay: number;
 		eol: string;
 		hotExit: string;
+		useExperimentalFileWatcher: boolean;
 	};
 }
 
@@ -818,5 +829,21 @@ export const SUPPORTED_ENCODINGS: { [encoding: string]: { labelLong: string; lab
 		labelLong: 'Simplified Chinese (GB 2312)',
 		labelShort: 'GB 2312',
 		order: 45
+	},
+	cp865: {
+		labelLong: 'Nordic DOS (CP 865)',
+		labelShort: 'CP 865',
+		order: 46
+	},
+	cp850: {
+		labelLong: 'Western European DOS (CP 850)',
+		labelShort: 'CP 850',
+		order: 47
 	}
 };
+
+export enum FileKind {
+	FILE,
+	FOLDER,
+	ROOT_FOLDER
+}

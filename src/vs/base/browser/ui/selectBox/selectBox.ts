@@ -7,11 +7,12 @@ import 'vs/css!./selectBox';
 
 import { IDisposable, dispose } from 'vs/base/common/lifecycle';
 import Event, { Emitter } from 'vs/base/common/event';
+import { KeyCode } from 'vs/base/common/keyCodes';
 import { Widget } from 'vs/base/browser/ui/widget';
 import * as dom from 'vs/base/browser/dom';
 import * as arrays from 'vs/base/common/arrays';
-import { Color } from "vs/base/common/color";
-import { clone } from "vs/base/common/objects";
+import { Color } from 'vs/base/common/color';
+import { clone } from 'vs/base/common/objects';
 
 export interface ISelectBoxStyles {
 	selectBackground?: Color;
@@ -19,11 +20,16 @@ export interface ISelectBoxStyles {
 	selectBorder?: Color;
 }
 
-const defaultStyles = {
+export const defaultStyles = {
 	selectBackground: Color.fromHex('#3C3C3C'),
 	selectForeground: Color.fromHex('#F0F0F0'),
 	selectBorder: Color.fromHex('#3C3C3C')
 };
+
+export interface ISelectData {
+	selected: string;
+	index: number;
+}
 
 export class SelectBox extends Widget {
 
@@ -31,7 +37,7 @@ export class SelectBox extends Widget {
 	private options: string[];
 	private selected: number;
 	private container: HTMLElement;
-	private _onDidSelect: Emitter<string>;
+	private _onDidSelect: Emitter<ISelectData>;
 	private toDispose: IDisposable[];
 	private selectBackground: Color;
 	private selectForeground: Color;
@@ -45,7 +51,7 @@ export class SelectBox extends Widget {
 
 		this.setOptions(options, selected);
 		this.toDispose = [];
-		this._onDidSelect = new Emitter<string>();
+		this._onDidSelect = new Emitter<ISelectData>();
 
 		this.selectBackground = styles.selectBackground;
 		this.selectForeground = styles.selectForeground;
@@ -53,11 +59,20 @@ export class SelectBox extends Widget {
 
 		this.toDispose.push(dom.addStandardDisposableListener(this.selectElement, 'change', (e) => {
 			this.selectElement.title = e.target.value;
-			this._onDidSelect.fire(e.target.value);
+			this._onDidSelect.fire({
+				index: e.target.selectedIndex,
+				selected: e.target.value
+			});
+		}));
+		this.toDispose.push(dom.addStandardDisposableListener(this.selectElement, 'keydown', (e) => {
+			if (e.equals(KeyCode.Space) || e.equals(KeyCode.Enter)) {
+				// Space is used to expand select box, do not propagate it (prevent action bar action run)
+				e.stopPropagation();
+			}
 		}));
 	}
 
-	public get onDidSelect(): Event<string> {
+	public get onDidSelect(): Event<ISelectData> {
 		return this._onDidSelect.event;
 	}
 
@@ -103,18 +118,18 @@ export class SelectBox extends Widget {
 		container.appendChild(this.selectElement);
 		this.setOptions(this.options, this.selected);
 
-		this._applyStyles();
+		this.applyStyles();
 	}
 
-	public style(styles: ISelectBoxStyles) {
+	public style(styles: ISelectBoxStyles): void {
 		this.selectBackground = styles.selectBackground;
 		this.selectForeground = styles.selectForeground;
 		this.selectBorder = styles.selectBorder;
 
-		this._applyStyles();
+		this.applyStyles();
 	}
 
-	protected _applyStyles() {
+	protected applyStyles(): void {
 		if (this.selectElement) {
 			const background = this.selectBackground ? this.selectBackground.toString() : null;
 			const foreground = this.selectForeground ? this.selectForeground.toString() : null;

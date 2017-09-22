@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/env bash
 
 if [[ "$OSTYPE" == "darwin"* ]]; then
 	realpath() { [[ $1 = /* ]] && echo "$1" || echo "$PWD/${1#./}"; }
@@ -22,7 +22,7 @@ ELECTRON_VERSION=$(
 ELECTRON_GYP_HOME=~/.electron-gyp
 mkdir -p $ELECTRON_GYP_HOME
 
-npm_config_disturl=https://atom.io/download/atom-shell \
+npm_config_disturl=https://atom.io/download/electron \
 npm_config_target=$ELECTRON_VERSION \
 npm_config_runtime=electron \
 HOME=$ELECTRON_GYP_HOME \

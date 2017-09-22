@@ -9,15 +9,16 @@ import * as strings from 'vs/base/common/strings';
 import { Position, IPosition } from 'vs/editor/common/core/position';
 import { Range, IRange } from 'vs/editor/common/core/range';
 import * as editorCommon from 'vs/editor/common/editorCommon';
-import { ModelLine } from 'vs/editor/common/model/modelLine';
+import { ModelLine, IModelLine, MinimalModelLine } from 'vs/editor/common/model/modelLine';
 import { guessIndentation } from 'vs/editor/common/model/indentationGuesser';
-import { DEFAULT_INDENTATION, DEFAULT_TRIM_AUTO_WHITESPACE } from 'vs/editor/common/config/defaultConfig';
+import { EDITOR_MODEL_DEFAULTS } from 'vs/editor/common/config/editorOptions';
 import { PrefixSumComputer } from 'vs/editor/common/viewModel/prefixSumComputer';
-import { IndentRange, computeRanges } from 'vs/editor/common/model/indentRanges';
 import { TextModelSearch, SearchParams } from 'vs/editor/common/model/textModelSearch';
 import { TextSource, ITextSource, IRawTextSource, RawTextSource } from 'vs/editor/common/model/textSource';
 import { IDisposable } from 'vs/base/common/lifecycle';
 import * as textModelEvents from 'vs/editor/common/model/textModelEvents';
+
+const USE_MIMINAL_MODEL_LINE = true;
 
 const LIMIT_FIND_COUNT = 999;
 export const LONG_LINE_BOUNDARY = 10000;
@@ -28,15 +29,16 @@ export interface ITextModelCreationData {
 }
 
 export class TextModel implements editorCommon.ITextModel {
-	private static MODEL_SYNC_LIMIT = 5 * 1024 * 1024; // 5 MB
+	private static MODEL_SYNC_LIMIT = 50 * 1024 * 1024; // 50 MB
 	private static MODEL_TOKENIZATION_LIMIT = 20 * 1024 * 1024; // 20 MB
+	private static MANY_MANY_LINES = 300 * 1000; // 300K lines
 
 	public static DEFAULT_CREATION_OPTIONS: editorCommon.ITextModelCreationOptions = {
-		tabSize: DEFAULT_INDENTATION.tabSize,
-		insertSpaces: DEFAULT_INDENTATION.insertSpaces,
+		tabSize: EDITOR_MODEL_DEFAULTS.tabSize,
+		insertSpaces: EDITOR_MODEL_DEFAULTS.insertSpaces,
 		detectIndentation: false,
 		defaultEOL: editorCommon.DefaultEndOfLine.LF,
-		trimAutoWhitespace: DEFAULT_TRIM_AUTO_WHITESPACE,
+		trimAutoWhitespace: EDITOR_MODEL_DEFAULTS.trimAutoWhitespace,
 	};
 
 	public static createFromString(text: string, options: editorCommon.ITextModelCreationOptions = TextModel.DEFAULT_CREATION_OPTIONS): TextModel {
@@ -76,13 +78,12 @@ export class TextModel implements editorCommon.ITextModel {
 
 	protected readonly _eventEmitter: OrderGuaranteeEventEmitter;
 
-	/*protected*/ _lines: ModelLine[];
+	/*protected*/ _lines: IModelLine[];
 	protected _EOL: string;
 	protected _isDisposed: boolean;
 	protected _isDisposing: boolean;
 	protected _options: editorCommon.TextModelResolvedOptions;
 	protected _lineStarts: PrefixSumComputer;
-	private _indentRanges: IndentRange[];
 
 	private _versionId: number;
 	/**
@@ -93,16 +94,26 @@ export class TextModel implements editorCommon.ITextModel {
 	protected _mightContainRTL: boolean;
 	protected _mightContainNonBasicASCII: boolean;
 
-	private _shouldSimplifyMode: boolean;
-	private _shouldDenyMode: boolean;
+	private readonly _shouldSimplifyMode: boolean;
+	protected readonly _isTooLargeForTokenization: boolean;
 
 	constructor(rawTextSource: IRawTextSource, creationOptions: editorCommon.ITextModelCreationOptions) {
 		this._eventEmitter = new OrderGuaranteeEventEmitter();
 
 		const textModelData = TextModel.resolveCreationData(rawTextSource, creationOptions);
 
-		this._shouldSimplifyMode = (textModelData.text.length > TextModel.MODEL_SYNC_LIMIT);
-		this._shouldDenyMode = (textModelData.text.length > TextModel.MODEL_TOKENIZATION_LIMIT);
+		// !!! Make a decision in the ctor and permanently respect this decision !!!
+		// If a model is too large at construction time, it will never get tokenized,
+		// under no circumstances.
+		this._isTooLargeForTokenization = (
+			(textModelData.text.length > TextModel.MODEL_TOKENIZATION_LIMIT)
+			|| (textModelData.text.lines.length > TextModel.MANY_MANY_LINES)
+		);
+
+		this._shouldSimplifyMode = (
+			this._isTooLargeForTokenization
+			|| (textModelData.text.length > TextModel.MODEL_SYNC_LIMIT)
+		);
 
 		this._options = new editorCommon.TextModelResolvedOptions(textModelData.options);
 		this._constructLines(textModelData.text);
@@ -111,20 +122,25 @@ export class TextModel implements editorCommon.ITextModel {
 		this._isDisposing = false;
 	}
 
+	protected _createModelLine(text: string, tabSize: number): IModelLine {
+		if (USE_MIMINAL_MODEL_LINE && this._isTooLargeForTokenization) {
+			return new MinimalModelLine(text, tabSize);
+		}
+		return new ModelLine(text, tabSize);
+	}
+
 	protected _assertNotDisposed(): void {
 		if (this._isDisposed) {
 			throw new Error('Model is disposed!');
 		}
 	}
 
-	public isTooLargeForHavingAMode(): boolean {
-		this._assertNotDisposed();
-		return this._shouldDenyMode;
+	public isTooLargeForHavingARichMode(): boolean {
+		return this._shouldSimplifyMode;
 	}
 
-	public isTooLargeForHavingARichMode(): boolean {
-		this._assertNotDisposed();
-		return this._shouldSimplifyMode;
+	public isTooLargeForTokenization(): boolean {
+		return this._isTooLargeForTokenization;
 	}
 
 	public getOptions(): editorCommon.TextModelResolvedOptions {
@@ -495,65 +511,6 @@ export class TextModel implements editorCommon.ITextModel {
 		return this._lines[lineNumber - 1].getIndentLevel();
 	}
 
-	protected _resetIndentRanges(): void {
-		this._indentRanges = null;
-	}
-
-	private _getIndentRanges(): IndentRange[] {
-		if (!this._indentRanges) {
-			this._indentRanges = computeRanges(this);
-		}
-		return this._indentRanges;
-	}
-
-	public getIndentRanges(): IndentRange[] {
-		this._assertNotDisposed();
-		let indentRanges = this._getIndentRanges();
-		return IndentRange.deepCloneArr(indentRanges);
-	}
-
-	private _toValidLineIndentGuide(lineNumber: number, indentGuide: number): number {
-		let lineIndentLevel = this._lines[lineNumber - 1].getIndentLevel();
-		if (lineIndentLevel === -1) {
-			return indentGuide;
-		}
-		let maxIndentGuide = Math.ceil(lineIndentLevel / this._options.tabSize);
-		return Math.min(maxIndentGuide, indentGuide);
-	}
-
-	public getLineIndentGuide(lineNumber: number): number {
-		this._assertNotDisposed();
-		if (lineNumber < 1 || lineNumber > this.getLineCount()) {
-			throw new Error('Illegal value ' + lineNumber + ' for `lineNumber`');
-		}
-
-		let indentRanges = this._getIndentRanges();
-
-		for (let i = indentRanges.length - 1; i >= 0; i--) {
-			let rng = indentRanges[i];
-
-			if (rng.startLineNumber === lineNumber) {
-				return this._toValidLineIndentGuide(lineNumber, Math.ceil(rng.indent / this._options.tabSize));
-			}
-			if (rng.startLineNumber < lineNumber && lineNumber <= rng.endLineNumber) {
-				return this._toValidLineIndentGuide(lineNumber, 1 + Math.floor(rng.indent / this._options.tabSize));
-			}
-			if (rng.endLineNumber + 1 === lineNumber) {
-				let bestIndent = rng.indent;
-				while (i > 0) {
-					i--;
-					rng = indentRanges[i];
-					if (rng.endLineNumber + 1 === lineNumber) {
-						bestIndent = rng.indent;
-					}
-				}
-				return this._toValidLineIndentGuide(lineNumber, Math.ceil(bestIndent / this._options.tabSize));
-			}
-		}
-
-		return 0;
-	}
-
 	public getLinesContent(): string[] {
 		this._assertNotDisposed();
 		var r: string[] = [];
@@ -588,7 +545,7 @@ export class TextModel implements editorCommon.ITextModel {
 		this._emitModelRawContentChangedEvent(
 			new textModelEvents.ModelRawContentChangedEvent(
 				[
-					new textModelEvents.ModelRawFlush()
+					new textModelEvents.ModelRawEOLChanged()
 				],
 				this._versionId,
 				false,
@@ -756,10 +713,10 @@ export class TextModel implements editorCommon.ITextModel {
 	private _constructLines(textSource: ITextSource): void {
 		const tabSize = this._options.tabSize;
 		let rawLines = textSource.lines;
-		let modelLines: ModelLine[] = [];
+		let modelLines: IModelLine[] = new Array<IModelLine>(rawLines.length);
 
 		for (let i = 0, len = rawLines.length; i < len; i++) {
-			modelLines[i] = new ModelLine(i + 1, rawLines[i], tabSize);
+			modelLines[i] = this._createModelLine(rawLines[i], tabSize);
 		}
 		this._BOM = textSource.BOM;
 		this._mightContainRTL = textSource.containsRTL;
@@ -767,7 +724,6 @@ export class TextModel implements editorCommon.ITextModel {
 		this._EOL = textSource.EOL;
 		this._lines = modelLines;
 		this._lineStarts = null;
-		this._resetIndentRanges();
 	}
 
 	private _getEndOfLine(eol: editorCommon.EndOfLinePreference): string {
@@ -782,7 +738,7 @@ export class TextModel implements editorCommon.ITextModel {
 		throw new Error('Unknown EOL preference');
 	}
 
-	public findMatches(searchString: string, rawSearchScope: any, isRegex: boolean, matchCase: boolean, wholeWord: boolean, captureMatches: boolean, limitResultCount: number = LIMIT_FIND_COUNT): editorCommon.FindMatch[] {
+	public findMatches(searchString: string, rawSearchScope: any, isRegex: boolean, matchCase: boolean, wordSeparators: string, captureMatches: boolean, limitResultCount: number = LIMIT_FIND_COUNT): editorCommon.FindMatch[] {
 		this._assertNotDisposed();
 
 		let searchRange: Range;
@@ -792,18 +748,18 @@ export class TextModel implements editorCommon.ITextModel {
 			searchRange = this.getFullModelRange();
 		}
 
-		return TextModelSearch.findMatches(this, new SearchParams(searchString, isRegex, matchCase, wholeWord), searchRange, captureMatches, limitResultCount);
+		return TextModelSearch.findMatches(this, new SearchParams(searchString, isRegex, matchCase, wordSeparators), searchRange, captureMatches, limitResultCount);
 	}
 
-	public findNextMatch(searchString: string, rawSearchStart: IPosition, isRegex: boolean, matchCase: boolean, wholeWord: boolean, captureMatches: boolean): editorCommon.FindMatch {
+	public findNextMatch(searchString: string, rawSearchStart: IPosition, isRegex: boolean, matchCase: boolean, wordSeparators: string, captureMatches: boolean): editorCommon.FindMatch {
 		this._assertNotDisposed();
 		const searchStart = this.validatePosition(rawSearchStart);
-		return TextModelSearch.findNextMatch(this, new SearchParams(searchString, isRegex, matchCase, wholeWord), searchStart, captureMatches);
+		return TextModelSearch.findNextMatch(this, new SearchParams(searchString, isRegex, matchCase, wordSeparators), searchStart, captureMatches);
 	}
 
-	public findPreviousMatch(searchString: string, rawSearchStart: IPosition, isRegex: boolean, matchCase: boolean, wholeWord: boolean, captureMatches: boolean): editorCommon.FindMatch {
+	public findPreviousMatch(searchString: string, rawSearchStart: IPosition, isRegex: boolean, matchCase: boolean, wordSeparators: string, captureMatches: boolean): editorCommon.FindMatch {
 		this._assertNotDisposed();
 		const searchStart = this.validatePosition(rawSearchStart);
-		return TextModelSearch.findPreviousMatch(this, new SearchParams(searchString, isRegex, matchCase, wholeWord), searchStart, captureMatches);
+		return TextModelSearch.findPreviousMatch(this, new SearchParams(searchString, isRegex, matchCase, wordSeparators), searchStart, captureMatches);
 	}
 }

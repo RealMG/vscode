@@ -7,13 +7,14 @@
 import {
 	createConnection, IConnection,
 	TextDocuments, TextDocument, InitializeParams, InitializeResult, NotificationType, RequestType,
-	DocumentRangeFormattingRequest, Disposable, Range
+	DocumentRangeFormattingRequest, Disposable, ServerCapabilities
 } from 'vscode-languageserver';
 
+import { DocumentColorRequest, ServerCapabilities as CPServerCapabilities, ColorPresentationRequest } from 'vscode-languageserver-protocol/lib/protocol.colorProvider.proposed';
+
 import { xhr, XHRResponse, configure as configureHttpRequests, getErrorStatusDescription } from 'request-light';
-import path = require('path');
 import fs = require('fs');
-import URI from './utils/uri';
+import URI from 'vscode-uri';
 import * as URL from 'url';
 import Strings = require('./utils/strings');
 import { JSONDocument, JSONSchema, LanguageSettings, getLanguageService } from 'vscode-json-languageservice';
@@ -34,10 +35,6 @@ namespace VSCodeContentRequest {
 	export const type: RequestType<string, string, any, any> = new RequestType('vscode/content');
 }
 
-namespace ColorSymbolRequest {
-	export const type: RequestType<string, Range[], any, any> = new RequestType('json/colorSymbols');
-}
-
 // Create a connection for the server
 let connection: IConnection = createConnection();
 
@@ -56,9 +53,7 @@ let clientDynamicRegisterSupport = false;
 
 // After the server has started the client sends an initilize request. The server receives
 // in the passed params the rootPath of the workspace plus the client capabilities.
-let workspaceRoot: URI;
 connection.onInitialize((params: InitializeParams): InitializeResult => {
-	workspaceRoot = URI.parse(params.rootPath);
 
 	function hasClientCapability(...keys: string[]) {
 		let c = params.capabilities;
@@ -70,16 +65,17 @@ connection.onInitialize((params: InitializeParams): InitializeResult => {
 
 	clientSnippetSupport = hasClientCapability('textDocument', 'completion', 'completionItem', 'snippetSupport');
 	clientDynamicRegisterSupport = hasClientCapability('workspace', 'symbol', 'dynamicRegistration');
-	return {
-		capabilities: {
-			// Tell the client that the server works in FULL text document sync mode
-			textDocumentSync: documents.syncKind,
-			completionProvider: clientSnippetSupport ? { resolveProvider: true, triggerCharacters: ['"', ':'] } : null,
-			hoverProvider: true,
-			documentSymbolProvider: true,
-			documentRangeFormattingProvider: false
-		}
+	let capabilities: ServerCapabilities & CPServerCapabilities = {
+		// Tell the client that the server works in FULL text document sync mode
+		textDocumentSync: documents.syncKind,
+		completionProvider: clientSnippetSupport ? { resolveProvider: true, triggerCharacters: ['"', ':'] } : null,
+		hoverProvider: true,
+		documentSymbolProvider: true,
+		documentRangeFormattingProvider: false,
+		colorProvider: true
 	};
+
+	return { capabilities };
 });
 
 let workspaceContext = {
@@ -111,7 +107,8 @@ let schemaRequestService = (uri: string): Thenable<string> => {
 			}
 		});
 	}
-	return xhr({ url: uri, followRedirects: 5 }).then(response => {
+	let headers = { 'Accept-Encoding': 'gzip, deflate' };
+	return xhr({ url: uri, followRedirects: 5, headers }).then(response => {
 		return response.responseText;
 	}, (error: XHRResponse) => {
 		return Promise.reject(error.responseText || getErrorStatusDescription(error.status) || error.toString());
@@ -160,11 +157,9 @@ connection.onDidChangeConfiguration((change) => {
 		let enableFormatter = settings && settings.json && settings.json.format && settings.json.format.enable;
 		if (enableFormatter) {
 			if (!formatterRegistration) {
-				console.log('enable');
 				formatterRegistration = connection.client.register(DocumentRangeFormattingRequest.type, { documentSelector: [{ language: 'json' }] });
 			}
 		} else if (formatterRegistration) {
-			console.log('enable');
 			formatterRegistration.then(r => r.dispose());
 			formatterRegistration = null;
 		}
@@ -194,19 +189,12 @@ function updateConfiguration() {
 		}
 	}
 	if (jsonConfigurationSettings) {
-		jsonConfigurationSettings.forEach(schema => {
+		jsonConfigurationSettings.forEach((schema, index) => {
 			let uri = schema.url;
 			if (!uri && schema.schema) {
-				uri = schema.schema.id;
-			}
-			if (!uri && schema.fileMatch) {
-				uri = 'vscode://schemas/custom/' + encodeURIComponent(schema.fileMatch.join('&'));
+				uri = schema.schema.id || `vscode://schemas/custom/${index}`;
 			}
 			if (uri) {
-				if (uri[0] === '.' && workspaceRoot) {
-					// workspace relative path
-					uri = URI.file(path.normalize(path.join(workspaceRoot.fsPath, uri))).toString();
-				}
 				languageSettings.schemas.push({ uri, fileMatch: schema.fileMatch, schema: schema.schema });
 			}
 		});
@@ -314,11 +302,20 @@ connection.onDocumentRangeFormatting(formatParams => {
 	return languageService.format(document, formatParams.range, formatParams.options);
 });
 
-connection.onRequest(ColorSymbolRequest.type, uri => {
-	let document = documents.get(uri);
+connection.onRequest(DocumentColorRequest.type, params => {
+	let document = documents.get(params.textDocument.uri);
 	if (document) {
 		let jsonDocument = getJSONDocument(document);
-		return languageService.findColorSymbols(document, jsonDocument);
+		return languageService.findDocumentColors(document, jsonDocument);
+	}
+	return [];
+});
+
+connection.onRequest(ColorPresentationRequest.type, params => {
+	let document = documents.get(params.textDocument.uri);
+	if (document) {
+		let jsonDocument = getJSONDocument(document);
+		return languageService.getColorPresentations(document, jsonDocument, params.colorInfo);
 	}
 	return [];
 });

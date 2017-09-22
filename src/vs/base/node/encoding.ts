@@ -8,7 +8,6 @@
 import stream = require('vs/base/node/stream');
 import iconv = require('iconv-lite');
 import { TPromise } from 'vs/base/common/winjs.base';
-import jschardet = require('jschardet');
 
 export const UTF8 = 'utf8';
 export const UTF8_with_bom = 'utf8bom';
@@ -95,18 +94,22 @@ export function detectEncodingByBOM(file: string): TPromise<string> {
 	return stream.readExactlyByFile(file, 3).then(({ buffer, bytesRead }) => detectEncodingByBOMFromBuffer(buffer, bytesRead));
 }
 
-const MINIMUM_THRESHOLD = 0.2; // TODO@Ben Decide how much this should be.
-jschardet.Constants.MINIMUM_THRESHOLD = MINIMUM_THRESHOLD;
+const MINIMUM_THRESHOLD = 0.2;
 
 const IGNORE_ENCODINGS = ['ascii', 'utf-8', 'utf-16', 'utf-32'];
-const MAPPED_ENCODINGS = {
+const MAPPED_ENCODINGS: { [name: string]: string } = {
 	'ibm866': 'cp866'
 };
 
 /**
  * Guesses the encoding from buffer.
  */
-export function guessEncodingByBuffer(buffer: NodeBuffer): string {
+export async function guessEncodingByBuffer(buffer: NodeBuffer): TPromise<string> {
+
+	const jschardet = await import('jschardet');
+
+	jschardet.Constants.MINIMUM_THRESHOLD = MINIMUM_THRESHOLD;
+
 	const guessed = jschardet.detect(buffer);
 	if (!guessed || !guessed.encoding) {
 		return null;
@@ -143,8 +146,8 @@ export function toCanonicalName(enc: string): string {
 			return 'utf-16le';
 		case 'utf16be':
 			return 'utf-16be';
-		case 'big5hkcs':
-			return 'big5-hkcs';
+		case 'big5hkscs':
+			return 'big5-hkscs';
 		case 'eucjp':
 			return 'euc-jp';
 		case 'euckr':

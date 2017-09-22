@@ -63,34 +63,25 @@ export class LineCommentCommand implements editorCommon.ICommand {
 	 * Returns null if any of the lines doesn't support a line comment string.
 	 */
 	public static _gatherPreflightCommentStrings(model: editorCommon.ITokenizedModel, startLineNumber: number, endLineNumber: number): ILinePreflightData[] {
-		let commentStrForLanguage: string[] = [];
+
+		model.tokenizeIfCheap(startLineNumber);
+		const languageId = model.getLanguageIdAtPosition(startLineNumber, 1);
+
+		const config = LanguageConfigurationRegistry.getComments(languageId);
+		const commentStr = (config ? config.lineCommentToken : null);
+		if (!commentStr) {
+			// Mode does not support line comments
+			return null;
+		}
+
 		let lines: ILinePreflightData[] = [];
 		for (let i = 0, lineCount = endLineNumber - startLineNumber + 1; i < lineCount; i++) {
-			let lineNumber = startLineNumber + i;
-			model.forceTokenization(lineNumber);
-			let languageId = model.getLanguageIdAtPosition(lineNumber, 1);
-
-			// Find the commentStr for this line, if none is found then bail out: we cannot do line comments
-			let commentStr: string;
-			if (commentStrForLanguage[languageId]) {
-				commentStr = commentStrForLanguage[languageId];
-			} else {
-				let config = LanguageConfigurationRegistry.getComments(languageId);
-				commentStr = (config ? config.lineCommentToken : null);
-				if (!commentStr) {
-					// Mode does not support line comments
-					return null;
-				}
-
-				commentStrForLanguage[languageId] = commentStr;
-			}
-
-			lines.push({
+			lines[i] = {
 				ignore: false,
 				commentStr: commentStr,
 				commentStrOffset: 0,
 				commentStrLength: commentStr.length
-			});
+			};
 		}
 
 		return lines;
@@ -250,6 +241,18 @@ export class LineCommentCommand implements editorCommon.ICommand {
 			}
 		}
 
+		// We have to adjust to possible inner white space.
+		// For Space after startToken, add Space to startToken - range math will work out.
+		if (startTokenIndex !== -1 && model.getLineContent(startLineNumber).charCodeAt(startTokenIndex + startToken.length) === CharCode.Space) {
+			startToken += ' ';
+		}
+
+		// For Space before endToken, add Space before endToken and shift index one left.
+		if (endTokenIndex !== -1 && model.getLineContent(endLineNumber).charCodeAt(endTokenIndex - 1) === CharCode.Space) {
+			endToken = ' ' + endToken;
+			endTokenIndex -= 1;
+		}
+
 		if (startTokenIndex !== -1 && endTokenIndex !== -1) {
 			return BlockCommentCommand._createRemoveBlockCommentOperations(
 				new Range(startLineNumber, startTokenIndex + startToken.length + 1, endLineNumber, endTokenIndex + 1), startToken, endToken
@@ -263,7 +266,7 @@ export class LineCommentCommand implements editorCommon.ICommand {
 	 * Given an unsuccessful analysis, delegate to the block comment command
 	 */
 	private _executeBlockComment(model: editorCommon.ITokenizedModel, builder: editorCommon.IEditOperationBuilder, s: Selection): void {
-		model.forceTokenization(s.startLineNumber);
+		model.tokenizeIfCheap(s.startLineNumber);
 		let languageId = model.getLanguageIdAtPosition(s.startLineNumber, s.startColumn);
 		let config = LanguageConfigurationRegistry.getComments(languageId);
 		if (!config || !config.blockCommentStartToken || !config.blockCommentEndToken) {
@@ -293,7 +296,8 @@ export class LineCommentCommand implements editorCommon.ICommand {
 			}
 
 			if (ops.length === 1) {
-				this._deltaColumn = startToken.length;
+				// Leave cursor after token and Space
+				this._deltaColumn = startToken.length + 1;
 			}
 		}
 		this._selectionId = builder.trackSelection(s);

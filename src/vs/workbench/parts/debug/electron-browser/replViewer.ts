@@ -6,23 +6,23 @@
 import * as nls from 'vs/nls';
 import { TPromise } from 'vs/base/common/winjs.base';
 import { IAction } from 'vs/base/common/actions';
+import * as lifecycle from 'vs/base/common/lifecycle';
+import * as errors from 'vs/base/common/errors';
 import { isFullWidthCharacter, removeAnsiEscapeCodes, endsWith } from 'vs/base/common/strings';
-import uri from 'vs/base/common/uri';
-import { isMacintosh } from 'vs/base/common/platform';
 import { IActionItem } from 'vs/base/browser/ui/actionbar/actionbar';
 import * as dom from 'vs/base/browser/dom';
-import * as errors from 'vs/base/common/errors';
 import severity from 'vs/base/common/severity';
-import { IMouseEvent, StandardMouseEvent } from 'vs/base/browser/mouseEvent';
-import { ITree, IAccessibilityProvider, IDataSource, IRenderer, IActionProvider } from 'vs/base/parts/tree/browser/tree';
+import { IMouseEvent } from 'vs/base/browser/mouseEvent';
+import { ITree, IAccessibilityProvider, ContextMenuEvent, IDataSource, IRenderer, IActionProvider } from 'vs/base/parts/tree/browser/tree';
 import { ICancelableEvent } from 'vs/base/parts/tree/browser/treeDefaults';
-import { IExpressionContainer, IExpression } from 'vs/workbench/parts/debug/common/debug';
+import { IExpressionContainer, IExpression, IReplElementSource } from 'vs/workbench/parts/debug/common/debug';
 import { Model, OutputNameValueElement, Expression, OutputElement, Variable } from 'vs/workbench/parts/debug/common/debugModel';
 import { renderVariable, renderExpressionValue, IVariableTemplateData, BaseDebugController } from 'vs/workbench/parts/debug/electron-browser/debugViewer';
 import { ClearReplAction } from 'vs/workbench/parts/debug/browser/debugActions';
-import { CopyAction } from 'vs/workbench/parts/debug/electron-browser/electronDebugActions';
+import { CopyAction, CopyAllAction } from 'vs/workbench/parts/debug/electron-browser/electronDebugActions';
 import { IInstantiationService } from 'vs/platform/instantiation/common/instantiation';
 import { IWorkbenchEditorService } from 'vs/workbench/services/editor/common/editorService';
+import { LinkDetector } from 'vs/workbench/parts/debug/browser/linkDetector';
 
 const $ = dom.$;
 
@@ -64,8 +64,10 @@ interface IExpressionTemplateData {
 
 interface IValueOutputTemplateData {
 	container: HTMLElement;
-	counter: HTMLElement;
 	value: HTMLElement;
+	source: HTMLElement;
+	getReplElementSource(): IReplElementSource;
+	toDispose: lifecycle.IDisposable[];
 }
 
 interface IKeyValueOutputTemplateData {
@@ -83,25 +85,18 @@ export class ReplExpressionsRenderer implements IRenderer {
 	private static VALUE_OUTPUT_TEMPLATE_ID = 'outputValue';
 	private static NAME_VALUE_OUTPUT_TEMPLATE_ID = 'outputNameValue';
 
-	private static FILE_LOCATION_PATTERNS: RegExp[] = [
-		// group 0: the full thing :)
-		// group 1: absolute path
-		// group 2: drive letter on windows with trailing backslash or leading slash on mac/linux
-		// group 3: line number
-		// group 4: column number
-		// eg: at Context.<anonymous> (c:\Users\someone\Desktop\mocha-runner\test\test.js:26:11)
-		/((\/|[a-zA-Z]:\\)[^\(\)<>\'\"\[\]]+):(\d+):(\d+)/
-	];
-
 	private static LINE_HEIGHT_PX = 18;
 
 	private width: number;
 	private characterWidth: number;
 
+	private linkDetector: LinkDetector;
+
 	constructor(
-		@IWorkbenchEditorService private editorService: IWorkbenchEditorService
+		@IWorkbenchEditorService private editorService: IWorkbenchEditorService,
+		@IInstantiationService private instantiationService: IInstantiationService
 	) {
-		// noop
+		this.linkDetector = this.instantiationService.createInstance(LinkDetector);
 	}
 
 	public getHeight(tree: ITree, element: any): number {
@@ -184,11 +179,25 @@ export class ReplExpressionsRenderer implements IRenderer {
 		if (templateId === ReplExpressionsRenderer.VALUE_OUTPUT_TEMPLATE_ID) {
 			let data: IValueOutputTemplateData = Object.create(null);
 			dom.addClass(container, 'output');
-			let expression = dom.append(container, $('.output.expression'));
+			let expression = dom.append(container, $('.output.expression.value-and-source'));
 
 			data.container = container;
-			data.counter = dom.append(expression, $('div.counter'));
 			data.value = dom.append(expression, $('span.value'));
+			data.source = dom.append(expression, $('.source'));
+			data.toDispose = [];
+			data.toDispose.push(dom.addDisposableListener(data.source, 'click', e => {
+				e.preventDefault();
+				e.stopPropagation();
+				const source = data.getReplElementSource();
+				if (source) {
+					source.source.openInEditor(this.editorService, {
+						startLineNumber: source.lineNumber,
+						startColumn: source.column,
+						endLineNumber: source.lineNumber,
+						endColumn: source.column
+					}).done(undefined, errors.onUnexpectedError);
+				}
+			}));
 
 			return data;
 		}
@@ -233,15 +242,6 @@ export class ReplExpressionsRenderer implements IRenderer {
 
 	private renderOutputValue(output: OutputElement, templateData: IValueOutputTemplateData): void {
 
-		// counter
-		if (output.counter > 1) {
-			templateData.counter.textContent = String(output.counter);
-			templateData.counter.className = (output.severity === severity.Warning) ? 'counter warn' : (output.severity === severity.Error) ? 'counter error' : 'counter info';
-		} else {
-			templateData.counter.textContent = '';
-			templateData.counter.className = 'counter';
-		}
-
 		// value
 		dom.clearNode(templateData.value);
 		templateData.value.className = '';
@@ -256,6 +256,9 @@ export class ReplExpressionsRenderer implements IRenderer {
 		}
 
 		dom.addClass(templateData.value, (output.severity === severity.Warning) ? 'warn' : (output.severity === severity.Error) ? 'error' : 'info');
+		templateData.source.textContent = output.sourceData ? `${output.sourceData.source.name}:${output.sourceData.lineNumber}` : '';
+		templateData.source.title = output.sourceData ? output.sourceData.source.uri.toString() : '';
+		templateData.getReplElementSource = () => output.sourceData;
 	}
 
 	private renderOutputNameValue(tree: ITree, output: OutputNameValueElement, templateData: IKeyValueOutputTemplateData): void {
@@ -330,7 +333,7 @@ export class ReplExpressionsRenderer implements IRenderer {
 
 						// flush text buffer if we have any
 						if (buffer) {
-							this.insert(this.handleLinks(buffer), currentToken || tokensContainer);
+							this.insert(this.linkDetector.handleLinks(buffer), currentToken || tokensContainer);
 							buffer = '';
 						}
 
@@ -350,7 +353,7 @@ export class ReplExpressionsRenderer implements IRenderer {
 
 		// flush remaining text buffer if we have any
 		if (buffer) {
-			let res = this.handleLinks(buffer);
+			let res = this.linkDetector.handleLinks(buffer);
 			if (typeof res !== 'string' || currentToken) {
 				if (!tokensContainer) {
 					tokensContainer = document.createElement('span');
@@ -371,69 +374,10 @@ export class ReplExpressionsRenderer implements IRenderer {
 		}
 	}
 
-	private handleLinks(text: string): HTMLElement | string {
-		let linkContainer: HTMLElement;
-
-		for (let pattern of ReplExpressionsRenderer.FILE_LOCATION_PATTERNS) {
-			pattern.lastIndex = 0; // the holy grail of software development
-
-			const match = pattern.exec(text);
-			let resource: uri = null;
-			try {
-				resource = match && uri.file(match[1]);
-			} catch (e) { }
-
-			if (resource) {
-				linkContainer = document.createElement('span');
-
-				let textBeforeLink = text.substr(0, match.index);
-				if (textBeforeLink) {
-					let span = document.createElement('span');
-					span.textContent = textBeforeLink;
-					linkContainer.appendChild(span);
-				}
-
-				const link = document.createElement('a');
-				link.textContent = text.substr(match.index, match[0].length);
-				link.title = isMacintosh ? nls.localize('fileLinkMac', "Click to follow (Cmd + click opens to the side)") : nls.localize('fileLink', "Click to follow (Ctrl + click opens to the side)");
-				linkContainer.appendChild(link);
-				link.onclick = (e) => this.onLinkClick(new StandardMouseEvent(e), resource, Number(match[3]), Number(match[4]));
-
-				let textAfterLink = text.substr(match.index + match[0].length);
-				if (textAfterLink) {
-					let span = document.createElement('span');
-					span.textContent = textAfterLink;
-					linkContainer.appendChild(span);
-				}
-
-				break; // support one link per line for now
-			}
-		}
-
-		return linkContainer || text;
-	}
-
-	private onLinkClick(event: IMouseEvent, resource: uri, line: number, column: number): void {
-		const selection = window.getSelection();
-		if (selection.type === 'Range') {
-			return; // do not navigate when user is selecting
-		}
-
-		event.preventDefault();
-
-		this.editorService.openEditor({
-			resource,
-			options: {
-				selection: {
-					startLineNumber: line,
-					startColumn: column
-				}
-			}
-		}, event.ctrlKey || event.metaKey).done(null, errors.onUnexpectedError);
-	}
-
 	public disposeTemplate(tree: ITree, templateId: string, templateData: any): void {
-		// noop
+		if (templateData.toDispose) {
+			lifecycle.dispose(templateData.toDispose);
+		}
 	}
 }
 
@@ -478,6 +422,7 @@ export class ReplExpressionsActionProvider implements IActionProvider {
 	public getSecondaryActions(tree: ITree, element: any): TPromise<IAction[]> {
 		const actions: IAction[] = [];
 		actions.push(new CopyAction(CopyAction.ID, CopyAction.LABEL));
+		actions.push(new CopyAllAction(CopyAllAction.ID, CopyAllAction.LABEL, tree));
 		actions.push(this.instantiationService.createInstance(ClearReplAction, ClearReplAction.ID, ClearReplAction.LABEL));
 
 		return TPromise.as(actions);
@@ -510,5 +455,9 @@ export class ReplExpressionsController extends BaseDebugController {
 		this.lastSelectedString = selection.toString();
 
 		return true;
+	}
+
+	public onContextMenu(tree: ITree, element: any, event: ContextMenuEvent): boolean {
+		return super.onContextMenu(tree, element, event, false);
 	}
 }

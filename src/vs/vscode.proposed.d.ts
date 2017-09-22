@@ -8,605 +8,246 @@
 declare module 'vscode' {
 
 	/**
-	 * Defines a problem pattern
+	 * Options to configure the behaviour of a file open dialog.
 	 */
-	export interface ProblemPattern {
-
+	export interface OpenDialogOptions {
 		/**
-		 * The regular expression to find a problem in the console output of an
-		 * executed task.
+		 * The resource the dialog shows when opened.
 		 */
-		regexp: RegExp;
+		defaultUri?: Uri;
 
 		/**
-		 * The match group index of the filename.
-		 *
-		 * Defaults to 1 if omitted.
+		 * A human-readable string for the open button.
 		 */
-		file?: number;
+		openLabel?: string;
 
 		/**
-		 * The match group index of the problems's location. Valid location
-		 * patterns are: (line), (line,column) and (startLine,startColumn,endLine,endColumn).
-		 * If omitted the line and colum properties are used.
+		 * Only allow to select files. *Note* that not all operating systems support
+		 * to select files and folders in one dialog instance.
 		 */
-		location?: number;
+		openFiles?: boolean;
 
 		/**
-		 * The match group index of the problem's line in the source file.
-		 *
-		 * Defaults to 2 if omitted.
+		 * Only allow to select folders. *Note* that not all operating systems support
+		 * to select files and folders in one dialog instance.
 		 */
-		line?: number;
+		openFolders?: boolean;
 
 		/**
-		 * The match group index of the problem's character in the source file.
-		 *
-		 * Defaults to 3 if omitted.
+		 * Allow to select many files or folders.
 		 */
-		character?: number;
+		openMany?: boolean;
 
 		/**
-		 * The match group index of the problem's end line in the source file.
-		 *
-		 * Defaults to undefined. No end line is captured.
+		 * A set of file filters that are shown in the dialog, e.g.
+		 * ```ts
+		 * {
+		 * 	['Images']: ['*.png', '*.jpg']
+		 * 	['TypeScript']: ['*.ts', '*.tsx']
+		 * }
+		 * ```
 		 */
-		endLine?: number;
-
-		/**
-		 * The match group index of the problem's end character in the source file.
-		 *
-		 * Defaults to undefined. No end column is captured.
-		 */
-		endCharacter?: number;
-
-		/**
-		 * The match group index of the problem's severity.
-		 *
-		 * Defaults to undefined. In this case the problem matcher's severity
-		 * is used.
-		*/
-		severity?: number;
-
-		/**
-		 * The match group index of the problems's code.
-		 *
-		 * Defaults to undefined. No code is captured.
-		 */
-		code?: number;
-
-		/**
-		 * The match group index of the message. If omitted it defaults
-		 * to 4 if location is specified. Otherwise it defaults to 5.
-		 */
-		message?: number;
-
-		/**
-		 * Specifies if the last pattern in a multi line problem matcher should
-		 * loop as long as it does match a line consequently. Only valid on the
-		 * last problem pattern in a multi line problem matcher.
-		 */
-		loop?: boolean;
+		filters: { [name: string]: string[] };
 	}
 
 	/**
-	 * A multi line problem pattern.
+	 * Options to configure the behaviour of a file save dialog.
 	 */
-	export type MultiLineProblemPattern = ProblemPattern[];
-
-	/**
-	 * The way how the file location is interpreted
-	 */
-	export enum FileLocationKind {
+	export interface SaveDialogOptions {
 		/**
-		 * VS Code should decide based on whether the file path found in the
-		 * output is absolute or relative. A relative file path will be treated
-		 * relative to the workspace root.
+		 * The resource the dialog shows when opened.
 		 */
-		Auto = 1,
+		defaultUri?: Uri;
 
 		/**
-		 * Always treat the file path relative.
+		 * A human-readable string for the save button.
 		 */
-		Relative = 2,
+		saveLabel?: string;
 
 		/**
-		 * Always treat the file path absolute.
+		 * A set of file filters that are shown in the dialog, e.g.
+		 * ```ts
+		 * {
+		 * 	['Images']: ['*.png', '*.jpg']
+		 * 	['TypeScript']: ['*.ts', '*.tsx']
+		 * }
+		 * ```
 		 */
-		Absolute = 3
+		filters: { [name: string]: string[] };
 	}
 
-	/**
-	 * Controls to which kind of documents problems are applied.
-	 */
-	export enum ApplyToKind {
-		/**
-		 * Problems are applied to all documents.
-		 */
-		AllDocuments = 1,
-		/**
-		 * Problems are applied to open documents only.
-		 */
-		OpenDocuments = 2,
+	export namespace window {
 
 		/**
-		 * Problems are applied to closed documents only.
-		 */
-		ClosedDocuments = 3
-	}
-
-
-	/**
-	 * A background monitor pattern
-	 */
-	export interface BackgroundPattern {
-		/**
-		 * The actual regular expression
-		 */
-		regexp: RegExp;
-
-		/**
-		 * The match group index of the filename. If provided the expression
-		 * is matched for that file only.
-		 */
-		file?: number;
-	}
-
-	/**
-	 * A description to control the activity of a problem matcher
-	 * watching a background task.
-	 */
-	export interface BackgroundMonitor {
-		/**
-		 * If set to true the monitor is in active mode when the task
-		 * starts. This is equals of issuing a line that matches the
-		 * beginPattern.
-		 */
-		activeOnStart?: boolean;
-
-		/**
-		 * If matched in the output the start of a background activity is signaled.
-		 */
-		beginsPattern: RegExp | BackgroundPattern;
-
-		/**
-		 * If matched in the output the end of a background activity is signaled.
-		 */
-		endsPattern: RegExp | BackgroundPattern;
-	}
-
-	/**
-	 * Defines a problem matcher
-	 */
-	export interface ProblemMatcher {
-		/**
-		 * The owner of a problem. Defaults to a generated id
-		 * if omitted.
-		 */
-		owner?: string;
-
-		/**
-		 * The type of documents problems detected by this matcher
-		 * apply to. Default to `ApplyToKind.AllDocuments` if omitted.
-		 */
-		applyTo?: ApplyToKind;
-
-		/**
-		 * How a file location recognize by a matcher should be interpreted. If omitted the file location
-		 * if `FileLocationKind.Auto`.
-		 */
-		fileLocation?: FileLocationKind | string;
-
-		/**
-		 * The actual pattern used by the problem matcher.
-		 */
-		pattern: ProblemPattern | MultiLineProblemPattern;
-
-		/**
-		 * The default severity of a detected problem in the output. Used
-		 * if the `ProblemPattern` doesn't define a severity match group.
-		 */
-		severity?: DiagnosticSeverity;
-
-		/**
-		 * A background monitor for tasks that are running in the background.
-		 */
-		backgound?: BackgroundMonitor;
-	}
-
-	/**
-	 * Controls the behaviour of the terminal's visibility.
-	 */
-	export enum RevealKind {
-		/**
-		 * Always brings the terminal to front if the task is executed.
-		 */
-		Always = 1,
-
-		/**
-		 * Only brings the terminal to front if a problem is detected executing the task
-		 * (e.g. the task couldn't be started because).
-		 */
-		Silent = 2,
-
-		/**
-		 * The terminal never comes to front when the task is executed.
-		 */
-		Never = 3
-	}
-
-	/**
-	 * Controls terminal specific behaviour.
-	 */
-	export interface TerminalBehaviour {
-		/**
-		 * Controls whether the terminal executing a task is brought to front or not.
-		 * Defaults to `RevealKind.Always`.
-		 */
-		reveal?: RevealKind;
-
-		/**
-		 * Controls whether the command is echoed in the terminal or not.
-		 */
-		echo?: boolean;
-	}
-
-
-	export interface ProcessOptions {
-		/**
-		 * The current working directory of the executed program or shell.
-		 * If omitted VSCode's current workspace root is used.
-		 */
-		cwd?: string;
-
-		/**
-		 * The additional environment of the executed program or shell. If omitted
-		 * the parent process' environment is used. If provided it is merged with
-		 * the parent process' environment.
-		 */
-		env?: { [key: string]: string };
-	}
-
-	export namespace TaskGroup {
-		/**
-		 * The clean task group
-		 */
-		export const Clean: 'clean';
-		/**
-		 * The build task group
-		 */
-		export const Build: 'build';
-		/**
-		 * The rebuild all task group
-		 */
-		export const RebuildAll: 'rebuildAll';
-		/**
-		 * The test task group
-		 */
-		export const Test: 'test';
-	}
-
-	/**
-	 * The supported task groups.
-	 */
-	export type TaskGroup = 'clean' | 'build' | 'rebuildAll' | 'test';
-
-	/**
-	 * A task that starts an external process.
-	 */
-	export class ProcessTask {
-
-		/**
-		 * Creates a process task.
+		 * Shows a file open dialog to the user.
 		 *
-		 * @param name the task's name. Is presented in the user interface.
-		 * @param process the process to start.
-		 * @param problemMatchers the problem matchers to use.
+		 * @param options Options that control the dialog.
+		 * @returns A promise that resolves to the selected resources or `undefined`.
 		 */
-		constructor(name: string, process: string, ...problemMatchers: ProblemMatcher[]);
+		export function showOpenDialog(options: OpenDialogOptions): Thenable<Uri[] | undefined>;
 
 		/**
-		 * Creates a process task.
+		 * Shows a file save dialog to the user.
 		 *
-		 * @param name the task's name. Is presented in the user interface.
-		 * @param process the process to start.
-		 * @param args arguments to be passed to the process.
-		 * @param problemMatchers the problem matchers to use.
+		 * @param options Options that control the dialog.
+		 * @returns A promise that resolves to the selected resource or `undefined`.
 		 */
-		constructor(name: string, process: string, args: string[], ...problemMatchers: ProblemMatcher[]);
+		export function showSaveDialog(options: SaveDialogOptions): Thenable<Uri | undefined>;
 
 		/**
-		 * Creates a process task.
+		 * Shows a selection list of [workspace folders](#workspace.workspaceFolders) to pick from.
+		 * Returns `undefined` if no folder is open.
 		 *
-		 * @param name the task's name. Is presented in the user interface.
-		 * @param process the process to start.
-		 * @param args arguments to be passed to the process.
-		 * @param options additional options for the started process.
-		 * @param problemMatchers the problem matchers to use.
+		 * @param options Configures the behavior of the workspace folder list.
+		 * @return A promise that resolves to the workspace folder or `undefined`.
 		 */
-		constructor(name: string, process: string, args: string[], options: ProcessOptions, ...problemMatchers: ProblemMatcher[]);
-
-		/**
-		 * The task's name
-		 */
-		readonly name: string;
-
-		/**
-		 * The task's identifier. If omitted the name is
-		 * used as an identifier.
-		 */
-		identifier: string;
-
-		/**
-		 * Whether the task is a background task or not.
-		 */
-		isBackground: boolean;
-
-		/**
-		 * The process to be executed.
-		 */
-		readonly process: string;
-
-		/**
-		 * The arguments passed to the process. Defaults to an empty array.
-		 */
-		args: string[];
-
-		/**
-		 * The task group this tasks belongs to. Defaults to undefined meaning
-		 * that the task doesn't belong to any special group.
-		 */
-		group?: TaskGroup;
-
-		/**
-		 * The process options used when the process is executed.
-		 * Defaults to an empty object literal.
-		 */
-		options: ProcessOptions;
-
-		/**
-		 * The terminal options. Defaults to an empty object literal.
-		 */
-		terminal: TerminalBehaviour;
-
-		/**
-		 * The problem matchers attached to the task. Defaults to an empty
-		 * array.
-		 */
-		problemMatchers: ProblemMatcher[];
+		export function showWorkspaceFolderPick(options?: WorkspaceFolderPickOptions): Thenable<WorkspaceFolder | undefined>;
 	}
 
-	export type ShellOptions = {
-		/**
-		 * The shell executable.
-		 */
-		executable: string;
-
-		/**
-		 * The arguments to be passed to the shell executable used to run the task.
-		 */
-		shellArgs?: string[];
-
-		/**
-		 * The current working directory of the executed shell.
-		 * If omitted VSCode's current workspace root is used.
-		 */
-		cwd?: string;
-
-		/**
-		 * The additional environment of the executed shell. If omitted
-		 * the parent process' environment is used. If provided it is merged with
-		 * the parent process' environment.
-		 */
-		env?: { [key: string]: string };
-	} | {
-		/**
-		 * The current working directory of the executed shell.
-		 * If omitted VSCode's current workspace root is used.
-		 */
-		cwd: string;
-
-		/**
-		 * The additional environment of the executed shell. If omitted
-		 * the parent process' environment is used. If provided it is merged with
-		 * the parent process' environment.
-		 */
-		env?: { [key: string]: string };
-	} | {
-		/**
-		 * The current working directory of the executed shell.
-		 * If omitted VSCode's current workspace root is used.
-		 */
-		cwd?: string;
-
-		/**
-		 * The additional environment of the executed shell. If omitted
-		 * the parent process' environment is used. If provided it is merged with
-		 * the parent process' environment.
-		 */
-		env: { [key: string]: string };
-	};
-
 	/**
-	 * A task that executes a shell command.
+	 * Options to configure the behaviour of the [workspace folder](#WorkspaceFolder) pick UI.
 	 */
-	export class ShellTask {
+	export interface WorkspaceFolderPickOptions {
 
 		/**
-		 * Creates a shell task.
-		 *
-		 * @param name the task's name. Is presented in the user interface.
-		 * @param commandLine the command line to execute.
-		 * @param problemMatchers the problem matchers to use.
+		 * An optional string to show as place holder in the input box to guide the user what to pick on.
 		 */
-		constructor(name: string, commandLine: string, ...problemMatchers: ProblemMatcher[]);
+		placeHolder?: string;
 
 		/**
-		 * Creates a shell task.
-		 *
-		 * @param name the task's name. Is presented in the user interface.
-		 * @param commandLine the command line to execute.
-		 * @param options additional options used when creating the shell.
-		 * @param problemMatchers the problem matchers to use.
+		 * Set to `true` to keep the picker open when focus moves to another part of the editor or to another window.
 		 */
-		constructor(name: string, commandLine: string, options: ShellOptions, ...problemMatchers: ProblemMatcher[]);
-
-		/**
-		 * The task's name
-		 */
-		readonly name: string;
-
-		/**
-		 * The task's identifier. If omitted the name is
-		 * used as an identifier.
-		 */
-		identifier: string;
-
-		/**
-		 * Whether the task is a background task or not.
-		 */
-		isBackground: boolean;
-
-		/**
-		 * The command line to execute.
-		 */
-		readonly commandLine: string;
-
-		/**
-		 * The task group this tasks belongs to. Defaults to undefined meaning
-		 * that the task doesn't belong to any special group.
-		 */
-		group?: TaskGroup;
-
-		/**
-		 * The shell options used when the shell is executed. Defaults to an
-		 * empty object literal.
-		 */
-		options: ShellOptions;
-
-		/**
-		 * The terminal options. Defaults to an empty object literal.
-		 */
-		terminal: TerminalBehaviour;
-
-		/**
-		 * The problem matchers attached to the task. Defaults to an empty
-		 * array.
-		 */
-		problemMatchers: ProblemMatcher[];
+		ignoreFocusOut?: boolean;
 	}
 
-	export type Task = ProcessTask | ShellTask;
 
-	/**
-	 * A task provider allows to add tasks to the task service.
-	 * A task provider is registerd via #workspace.registerTaskProvider.
-	 */
-	export interface TaskProvider {
-		/**
-		 * Provides additional tasks.
-		 * @param token A cancellation token.
-		 * @return a #TaskSet
-		 */
-		provideTasks(token: CancellationToken): ProviderResult<Task[]>;
+	// export enum FileErrorCodes {
+	// 	/**
+	// 	 * Not owner.
+	// 	 */
+	// 	EPERM = 1,
+	// 	/**
+	// 	 * No such file or directory.
+	// 	 */
+	// 	ENOENT = 2,
+	// 	/**
+	// 	 * I/O error.
+	// 	 */
+	// 	EIO = 5,
+	// 	/**
+	// 	 * Permission denied.
+	// 	 */
+	// 	EACCES = 13,
+	// 	/**
+	// 	 * File exists.
+	// 	 */
+	// 	EEXIST = 17,
+	// 	/**
+	// 	 * Not a directory.
+	// 	 */
+	// 	ENOTDIR = 20,
+	// 	/**
+	// 	 * Is a directory.
+	// 	 */
+	// 	EISDIR = 21,
+	// 	/**
+	// 	 *  File too large.
+	// 	 */
+	// 	EFBIG = 27,
+	// 	/**
+	// 	 * No space left on device.
+	// 	 */
+	// 	ENOSPC = 28,
+	// 	/**
+	// 	 * Directory is not empty.
+	// 	 */
+	// 	ENOTEMPTY = 66,
+	// 	/**
+	// 	 * Invalid file handle.
+	// 	 */
+	// 	ESTALE = 70,
+	// 	/**
+	// 	 * Illegal NFS file handle.
+	// 	 */
+	// 	EBADHANDLE = 10001,
+	// }
+
+	export enum FileChangeType {
+		Updated = 0,
+		Added = 1,
+		Deleted = 2
+	}
+
+	export interface FileChange {
+		type: FileChangeType;
+		resource: Uri;
+	}
+
+	export enum FileType {
+		File = 0,
+		Dir = 1,
+		Symlink = 2
+	}
+
+	export interface FileStat {
+		id: number | string;
+		mtime: number;
+		size: number;
+		type: FileType;
+	}
+
+	// todo@joh discover files etc
+	export interface FileSystemProvider {
+
+		onDidChange?: Event<FileChange[]>;
+
+		root: Uri;
+
+		// more...
+		//
+		utimes(resource: Uri, mtime: number): Thenable<FileStat>;
+
+		stat(resource: Uri): Thenable<FileStat>;
+
+		read(resource: Uri, offset: number, length: number, progress: Progress<Uint8Array>): Thenable<number>;
+
+		// todo@remote
+		// offset - byte offset to start
+		// count - number of bytes to write
+		// Thenable<number> - number of bytes actually written
+		write(resource: Uri, content: Uint8Array): Thenable<void>;
+
+		// todo@remote
+		// Thenable<FileStat>
+		move(resource: Uri, target: Uri): Thenable<FileStat>;
+
+		// todo@remote
+		// helps with performance bigly
+		// copy?(from: Uri, to: Uri): Thenable<void>;
+
+		// todo@remote
+		// Thenable<FileStat>
+		mkdir(resource: Uri): Thenable<FileStat>;
+
+		readdir(resource: Uri): Thenable<[Uri, FileStat][]>;
+
+		// todo@remote
+		// ? merge both
+		// ? recursive del
+		rmdir(resource: Uri): Thenable<void>;
+		unlink(resource: Uri): Thenable<void>;
+
+		// todo@remote
+		// create(resource: Uri): Thenable<FileStat>;
 	}
 
 	export namespace workspace {
-		/**
-		 * Register a task provider.
-		 *
-		 * @param provider A task provider.
-		 * @return A [disposable](#Disposable) that unregisters this provider when being disposed.
-		 */
-		export function registerTaskProvider(provider: TaskProvider): Disposable;
-
+		export function registerFileSystemProvider(authority: string, provider: FileSystemProvider): Disposable;
 	}
 
 	export namespace window {
-
-		/**
-		 * Show window-wide progress, e.g. in the status bar, for the provided task. The task is
-		 * considering running as long as the promise it returned isn't resolved or rejected.
-		 *
-		 * @param task A function callback that represents a long running operation.
-		 */
-		export function withWindowProgress<R>(title: string, task: (progress: Progress<string>, token: CancellationToken) => Thenable<R>): Thenable<R>;
 
 		export function sampleFunction(): Thenable<any>;
-	}
-
-	export namespace window {
-
-		/**
-		 * Register a [TreeExplorerNodeProvider](#TreeExplorerNodeProvider).
-		 *
-		 * @param providerId A unique id that identifies the provider.
-		 * @param provider A [TreeExplorerNodeProvider](#TreeExplorerNodeProvider).
-		 * @return A [disposable](#Disposable) that unregisters this provider when being disposed.
-		 */
-		export function registerTreeExplorerNodeProvider(providerId: string, provider: TreeExplorerNodeProvider<any>): Disposable;
-	}
-
-	/**
-	 * A node provider for a tree explorer contribution.
-	 *
-	 * Providers are registered through (#window.registerTreeExplorerNodeProvider) with a
-	 * `providerId` that corresponds to the `treeExplorerNodeProviderId` in the extension's
-	 * `contributes.explorer` section.
-	 *
-	 * The contributed tree explorer will ask the corresponding provider to provide the root
-	 * node and resolve children for each node. In addition, the provider could **optionally**
-	 * provide the following information for each node:
-	 * - label: A human-readable label used for rendering the node.
-	 * - hasChildren: Whether the node has children and is expandable.
-	 * - clickCommand: A command to execute when the node is clicked.
-	 */
-	export interface TreeExplorerNodeProvider<T> {
-
-		/**
-		 * Provide the root node. This function will be called when the tree explorer is activated
-		 * for the first time. The root node is hidden and its direct children will be displayed on the first level of
-		 * the tree explorer.
-		 *
-		 * @return The root node.
-		 */
-		provideRootNode(): T | Thenable<T>;
-
-		/**
-		 * Resolve the children of `node`.
-		 *
-		 * @param node The node from which the provider resolves children.
-		 * @return Children of `node`.
-		 */
-		resolveChildren(node: T): T[] | Thenable<T[]>;
-
-		/**
-		 * Provide a human-readable string that will be used for rendering the node. Default to use
-		 * `node.toString()` if not provided.
-		 *
-		 * @param node The node from which the provider computes label.
-		 * @return A human-readable label.
-		 */
-		getLabel?(node: T): string;
-
-		/**
-		 * Determine if `node` has children and is expandable. Default to `true` if not provided.
-		 *
-		 * @param node The node to determine if it has children and is expandable.
-		 * @return A boolean that determines if `node` has children and is expandable.
-		 */
-		getHasChildren?(node: T): boolean;
-
-		/**
-		 * Get the command to execute when `node` is clicked.
-		 *
-		 * Commands can be registered through [registerCommand](#commands.registerCommand). `node` will be provided
-		 * as the first argument to the command's callback function.
-		 *
-		 * @param node The node that the command is associated with.
-		 * @return The command to execute when `node` is clicked.
-		 */
-		getClickCommand?(node: T): string;
 	}
 
 	/**
@@ -638,52 +279,107 @@ declare module 'vscode' {
 		export function registerDiffInformationCommand(command: string, callback: (diff: LineChange[], ...args: any[]) => any, thisArg?: any): Disposable;
 	}
 
-	export interface Terminal {
+	/**
+	 * Represents a color in RGBA space.
+	 */
+	export class Color {
 
 		/**
-		 * The name of the terminal.
+		 * The red component of this color in the range [0-1].
 		 */
-		readonly name: string;
+		readonly red: number;
 
 		/**
-		 * The process ID of the shell process.
+		 * The green component of this color in the range [0-1].
 		 */
-		readonly processId: Thenable<number>;
+		readonly green: number;
 
 		/**
-		 * Send text to the terminal. The text is written to the stdin of the underlying pty process
-		 * (shell) of the terminal.
+		 * The blue component of this color in the range [0-1].
+		 */
+		readonly blue: number;
+
+		/**
+		 * The alpha component of this color in the range [0-1].
+		 */
+		readonly alpha: number;
+
+		constructor(red: number, green: number, blue: number, alpha: number);
+	}
+
+	/**
+	 * Represents a color range from a document.
+	 */
+	export class ColorInformation {
+
+		/**
+		 * The range in the document where this color appers.
+		 */
+		range: Range;
+
+		/**
+		 * The actual color value for this color range.
+		 */
+		color: Color;
+
+		/**
+		 * Creates a new color range.
 		 *
-		 * @param text The text to send.
-		 * @param addNewLine Whether to add a new line to the text being sent, this is normally
-		 * required to run a command in the terminal. The character(s) added are \n or \r\n
-		 * depending on the platform. This defaults to `true`.
+		 * @param range The range the color appears in. Must not be empty.
+		 * @param color The value of the color.
+		 * @param format The format in which this color is currently formatted.
 		 */
-		sendText(text: string, addNewLine?: boolean): void;
+		constructor(range: Range, color: Color);
+	}
+
+	export class ColorPresentation {
+		/**
+		 * The label of this color presentation. It will be shown on the color
+		 * picker header. By default this is also the text that is inserted when selecting
+		 * this color presentation.
+		 */
+		label: string;
+		/**
+		 * An [edit](#TextEdit) which is applied to a document when selecting
+		 * this presentation for the color.  When `falsy` the [label](#ColorPresentation.label)
+		 * is used.
+		 */
+		textEdit?: TextEdit;
+		/**
+		 * An optional array of additional [text edits](#TextEdit) that are applied when
+		 * selecting this color presentation. Edits must not overlap with the main [edit](#ColorPresentation.textEdit) nor with themselves.
+		 */
+		additionalTextEdits?: TextEdit[];
 
 		/**
-		 * Show the terminal panel and reveal this terminal in the UI.
+		 * Creates a new color presentation.
 		 *
-		 * @param preserveFocus When `true` the terminal will not take focus.
+		 * @param label The label of this color presentation.
 		 */
-		show(preserveFocus?: boolean): void;
+		constructor(label: string);
+	}
 
+	/**
+	 * The document color provider defines the contract between extensions and feature of
+	 * picking and modifying colors in the editor.
+	 */
+	export interface DocumentColorProvider {
 		/**
-		 * Hide the terminal panel if this terminal is currently showing.
-		 */
-		hide(): void;
-
-		/**
-		 * Dispose and free associated resources.
-		 */
-		dispose(): void;
-
-		/**
-		 * Experimental API that allows listening to the raw data stream coming from the terminal's
-		 * pty process (including ANSI escape sequences).
+		 * Provide colors for the given document.
 		 *
-		 * @param callback The callback that is triggered when data is sent to the terminal.
+		 * @param document The document in which the command was invoked.
+		 * @param token A cancellation token.
+		 * @return An array of [color informations](#ColorInformation) or a thenable that resolves to such. The lack of a result
+		 * can be signaled by returning `undefined`, `null`, or an empty array.
 		 */
-		onData(callback: (data: string) => any): void;
+		provideDocumentColors(document: TextDocument, token: CancellationToken): ProviderResult<ColorInformation[]>;
+		/**
+		 * Provide representations for a color.
+		 */
+		provideColorPresentations(document: TextDocument, colorInfo: ColorInformation, token: CancellationToken): ProviderResult<ColorPresentation[]>;
+	}
+
+	export namespace languages {
+		export function registerColorProvider(selector: DocumentSelector, provider: DocumentColorProvider): Disposable;
 	}
 }

@@ -11,11 +11,11 @@ import Event, { Emitter } from 'vs/base/common/event';
 import { IDisposable, dispose } from 'vs/base/common/lifecycle';
 import { TPromise } from 'vs/base/common/winjs.base';
 import { ICommonCodeEditor, IModel, IWordAtPosition } from 'vs/editor/common/editorCommon';
-import { ISuggestSupport, SuggestRegistry, StandardTokenType } from 'vs/editor/common/modes';
+import { ISuggestSupport, SuggestRegistry, StandardTokenType, SuggestTriggerKind } from 'vs/editor/common/modes';
 import { Position } from 'vs/editor/common/core/position';
 import { provideSuggestionItems, getSuggestionComparator, ISuggestionItem } from './suggest';
 import { CompletionModel } from './completionModel';
-import { CursorChangeReason, ICursorSelectionChangedEvent } from "vs/editor/common/controller/cursorEvents";
+import { CursorChangeReason, ICursorSelectionChangedEvent } from 'vs/editor/common/controller/cursorEvents';
 
 export interface ICancelEvent {
 	retrigger: boolean;
@@ -31,6 +31,11 @@ export interface ISuggestEvent {
 	auto: boolean;
 }
 
+export interface SuggestTriggerContext {
+	auto: boolean;
+	triggerCharacter?: string;
+}
+
 export class LineContext {
 
 	static shouldAutoTrigger(editor: ICommonCodeEditor): boolean {
@@ -39,6 +44,7 @@ export class LineContext {
 			return false;
 		}
 		const pos = editor.getPosition();
+		model.tokenizeIfCheap(pos.lineNumber);
 		const word = model.getWordAtPosition(pos);
 		if (!word) {
 			return false;
@@ -68,7 +74,7 @@ export class LineContext {
 	readonly column: number;
 	readonly leadingLineContent: string;
 	readonly leadingWord: IWordAtPosition;
-	readonly auto;
+	readonly auto: boolean;
 
 	constructor(model: IModel, position: Position, auto: boolean) {
 		this.leadingLineContent = model.getLineContent(position.lineNumber).substr(0, position.column - 1);
@@ -100,13 +106,13 @@ export class SuggestModel implements IDisposable {
 
 	private completionModel: CompletionModel;
 
-	private _onDidCancel: Emitter<ICancelEvent> = new Emitter();
+	private _onDidCancel: Emitter<ICancelEvent> = new Emitter<ICancelEvent>();
 	get onDidCancel(): Event<ICancelEvent> { return this._onDidCancel.event; }
 
-	private _onDidTrigger: Emitter<ITriggerEvent> = new Emitter();
+	private _onDidTrigger: Emitter<ITriggerEvent> = new Emitter<ITriggerEvent>();
 	get onDidTrigger(): Event<ITriggerEvent> { return this._onDidTrigger.event; }
 
-	private _onDidSuggest: Emitter<ISuggestEvent> = new Emitter();
+	private _onDidSuggest: Emitter<ISuggestEvent> = new Emitter<ISuggestEvent>();
 	get onDidSuggest(): Event<ISuggestEvent> { return this._onDidSuggest.event; }
 
 	constructor(private editor: ICommonCodeEditor) {
@@ -145,6 +151,7 @@ export class SuggestModel implements IDisposable {
 	dispose(): void {
 		dispose([this._onDidCancel, this._onDidSuggest, this._onDidTrigger, this.triggerCharacterListener, this.triggerRefilter]);
 		this.toDispose = dispose(this.toDispose);
+		dispose(this.completionModel);
 		this.cancel();
 	}
 
@@ -199,7 +206,7 @@ export class SuggestModel implements IDisposable {
 						}
 					}
 				}
-				this.trigger(true, false, supports, items);
+				this.trigger({ auto: true, triggerCharacter: lastChar }, Boolean(this.completionModel), supports, items);
 			}
 		});
 	}
@@ -223,6 +230,7 @@ export class SuggestModel implements IDisposable {
 		}
 
 		this._state = State.Idle;
+		dispose(this.completionModel);
 		this.completionModel = null;
 		this.context = null;
 
@@ -234,7 +242,7 @@ export class SuggestModel implements IDisposable {
 			if (!SuggestRegistry.has(this.editor.getModel())) {
 				this.cancel();
 			} else {
-				this.trigger(this._state === State.Auto, true);
+				this.trigger({ auto: this._state === State.Auto }, true);
 			}
 		}
 	}
@@ -247,6 +255,12 @@ export class SuggestModel implements IDisposable {
 		if (!e.selection.isEmpty()
 			|| e.source !== 'keyboard'
 			|| e.reason !== CursorChangeReason.NotSet) {
+
+			if (this._state === State.Idle) {
+				// Early exit if nothing needs to be done!
+				// Leave some form of early exit check here if you wish to continue being a cursor position change listener ;)
+				return;
+			}
 
 			this.cancel();
 			return;
@@ -287,7 +301,7 @@ export class SuggestModel implements IDisposable {
 						} else if (quickSuggestions === true) {
 							// all good
 						} else {
-							model.forceTokenization(pos.lineNumber);
+							model.tokenizeIfCheap(pos.lineNumber);
 							const { tokenType } = model
 								.getLineTokens(pos.lineNumber)
 								.findTokenAtOffset(pos.column - 1);
@@ -302,7 +316,7 @@ export class SuggestModel implements IDisposable {
 						}
 
 						this.triggerAutoSuggestPromise = null;
-						this.trigger(true);
+						this.trigger({ auto: true });
 					});
 				}
 			}
@@ -317,14 +331,14 @@ export class SuggestModel implements IDisposable {
 		}
 	}
 
-	public trigger(auto: boolean, retrigger: boolean = false, onlyFrom?: ISuggestSupport[], existingItems?: ISuggestionItem[]): void {
+	public trigger(context: SuggestTriggerContext, retrigger: boolean = false, onlyFrom?: ISuggestSupport[], existingItems?: ISuggestionItem[]): void {
 
 		const model = this.editor.getModel();
 
 		if (!model) {
 			return;
 		}
-
+		const auto = context.auto;
 		const ctx = new LineContext(model, this.editor.getPosition(), auto);
 
 		if (!LineContext.isInEditableRange(this.editor)) {
@@ -341,7 +355,11 @@ export class SuggestModel implements IDisposable {
 
 		this.requestPromise = provideSuggestionItems(model, this.editor.getPosition(),
 			this.editor.getConfiguration().contribInfo.snippetSuggestions,
-			onlyFrom
+			onlyFrom,
+			{
+				triggerCharacter: context.triggerCharacter,
+				triggerKind: context.triggerCharacter ? SuggestTriggerKind.TriggerCharacter : SuggestTriggerKind.Invoke
+			}
 		).then(items => {
 
 			this.requestPromise = null;
@@ -359,10 +377,11 @@ export class SuggestModel implements IDisposable {
 			}
 
 			const ctx = new LineContext(model, this.editor.getPosition(), auto);
+			dispose(this.completionModel);
 			this.completionModel = new CompletionModel(items, this.context.column, {
 				leadingLineContent: ctx.leadingLineContent,
 				characterCountDelta: this.context ? ctx.column - this.context.column : 0
-			});
+			}, this.editor.getConfiguration().contribInfo.snippetSuggestions);
 			this.onNewContext(ctx);
 
 		}).then(null, onUnexpectedError);
@@ -384,7 +403,7 @@ export class SuggestModel implements IDisposable {
 		if (ctx.column < this.context.column) {
 			// typed -> moved cursor LEFT -> retrigger if still on a word
 			if (ctx.leadingWord.word) {
-				this.trigger(this.context.auto, true);
+				this.trigger({ auto: this.context.auto }, true);
 			} else {
 				this.cancel();
 			}
@@ -396,10 +415,10 @@ export class SuggestModel implements IDisposable {
 			return;
 		}
 
-		if (ctx.column > this.context.column && this.completionModel.incomplete) {
-			// typed -> moved cursor RIGHT & incomple model -> retrigger
+		if (ctx.column > this.context.column && this.completionModel.incomplete && ctx.leadingWord.word.length !== 0) {
+			// typed -> moved cursor RIGHT & incomple model & still on a word -> retrigger
 			const { complete, incomplete } = this.completionModel.resolveIncompleteInfo();
-			this.trigger(this._state === State.Auto, true, incomplete, complete);
+			this.trigger({ auto: this._state === State.Auto }, true, incomplete, complete);
 
 		} else {
 			// typed -> moved cursor RIGHT -> update UI
@@ -415,7 +434,7 @@ export class SuggestModel implements IDisposable {
 
 				if (LineContext.shouldAutoTrigger(this.editor) && this.context.leadingWord.endColumn < ctx.leadingWord.startColumn) {
 					// retrigger when heading into a new word
-					this.trigger(this.context.auto, true);
+					this.trigger({ auto: this.context.auto }, true);
 					return;
 				}
 
@@ -423,6 +442,13 @@ export class SuggestModel implements IDisposable {
 					// freeze when IntelliSense was manually requested
 					this.completionModel.lineContext = oldLineContext;
 					isFrozen = this.completionModel.items.length > 0;
+
+					if (isFrozen && ctx.leadingWord.word.length === 0) {
+						// there were results before but now there aren't
+						// and also we are not on a word anymore -> cancel
+						this.cancel();
+						return;
+					}
 
 				} else {
 					// nothing left

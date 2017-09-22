@@ -10,19 +10,18 @@ import { compareIgnoreCase } from 'vs/base/common/strings';
 import { assign } from 'vs/base/common/objects';
 import { onUnexpectedExternalError } from 'vs/base/common/errors';
 import { TPromise } from 'vs/base/common/winjs.base';
-import { IModel } from 'vs/editor/common/editorCommon';
+import { IModel, IEditorContribution, ICommonCodeEditor } from 'vs/editor/common/editorCommon';
 import { CommonEditorRegistry } from 'vs/editor/common/editorCommonExtensions';
-import { ISuggestResult, ISuggestSupport, ISuggestion, SuggestRegistry } from 'vs/editor/common/modes';
+import { ISuggestResult, ISuggestSupport, ISuggestion, SuggestRegistry, SuggestContext, SuggestTriggerKind } from 'vs/editor/common/modes';
 import { Position, IPosition } from 'vs/editor/common/core/position';
 import { RawContextKey } from 'vs/platform/contextkey/common/contextkey';
-import { DefaultConfig } from 'vs/editor/common/config/defaultConfig';
 
 export const Context = {
 	Visible: new RawContextKey<boolean>('suggestWidgetVisible', false),
 	MultipleSuggestions: new RawContextKey<boolean>('suggestWidgetMultipleSuggestions', false),
 	MakesTextEdit: new RawContextKey('suggestionMakesTextEdit', true),
 	AcceptOnKey: new RawContextKey<boolean>('suggestionSupportsAcceptOnKey', true),
-	AcceptSuggestionsOnEnter: new RawContextKey<boolean>('acceptSuggestionOnEnter', DefaultConfig.editor.acceptSuggestionOnEnter)
+	AcceptSuggestionsOnEnter: new RawContextKey<boolean>('acceptSuggestionOnEnter', true)
 };
 
 export interface ISuggestionItem {
@@ -43,7 +42,7 @@ export function setSnippetSuggestSupport(support: ISuggestSupport): ISuggestSupp
 	return old;
 }
 
-export function provideSuggestionItems(model: IModel, position: Position, snippetConfig: SnippetConfig = 'bottom', onlyFrom?: ISuggestSupport[]): TPromise<ISuggestionItem[]> {
+export function provideSuggestionItems(model: IModel, position: Position, snippetConfig: SnippetConfig = 'bottom', onlyFrom?: ISuggestSupport[], context?: SuggestContext): TPromise<ISuggestionItem[]> {
 
 	const allSuggestions: ISuggestionItem[] = [];
 	const acceptSuggestion = createSuggesionFilter(snippetConfig);
@@ -57,6 +56,8 @@ export function provideSuggestionItems(model: IModel, position: Position, snippe
 	if (snippetConfig !== 'none' && _snippetSuggestSupport) {
 		supports.unshift([_snippetSuggestSupport]);
 	}
+
+	const suggestConext = context || { triggerKind: SuggestTriggerKind.Invoke };
 
 	// add suggestions from contributed providers - providers are ordered in groups of
 	// equal score and once a group produces a result the process stops
@@ -74,7 +75,7 @@ export function provideSuggestionItems(model: IModel, position: Position, snippe
 					return undefined;
 				}
 
-				return asWinJsPromise(token => support.provideCompletionItems(model, position, token)).then(container => {
+				return asWinJsPromise(token => support.provideCompletionItems(model, position, suggestConext, token)).then(container => {
 
 					const len = allSuggestions.length;
 
@@ -217,3 +218,30 @@ CommonEditorRegistry.registerDefaultLanguageCommand('_executeCompletionItemProvi
 		return result;
 	});
 });
+
+interface SuggestController extends IEditorContribution {
+	triggerSuggest(onlyFrom?: ISuggestSupport[]): void;
+}
+
+let _suggestions: ISuggestion[];
+let _provider = new class implements ISuggestSupport {
+	provideCompletionItems(): ISuggestResult {
+		return _suggestions && { suggestions: _suggestions };
+	}
+};
+
+SuggestRegistry.register('*', _provider);
+
+/**
+ *
+ * @param editor
+ * @param suggestions
+ */
+export function showSimpleSuggestions(editor: ICommonCodeEditor, suggestions: ISuggestion[]) {
+	setTimeout(() => {
+		_suggestions = suggestions;
+		editor.getContribution<SuggestController>('editor.contrib.suggestController').triggerSuggest([_provider]);
+		_suggestions = undefined;
+	}, 0);
+}
+

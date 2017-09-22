@@ -14,8 +14,8 @@ import * as browser from 'vs/base/browser/browser';
 import { IViewCursorRenderData } from 'vs/editor/browser/viewParts/viewCursors/viewCursor';
 import { PartFingerprint, PartFingerprints } from 'vs/editor/browser/view/viewPart';
 import { IViewModel } from 'vs/editor/common/viewModel/viewModel';
-import { EditorLayoutInfo } from "vs/editor/common/config/editorOptions";
-import { ViewLine } from "vs/editor/browser/viewParts/lines/viewLine";
+import { EditorLayoutInfo } from 'vs/editor/common/config/editorOptions';
+import { ViewLine } from 'vs/editor/browser/viewParts/lines/viewLine';
 
 export interface IViewZoneData {
 	viewZoneId: number;
@@ -67,7 +67,7 @@ interface IETextRange {
 
 declare var IETextRange: {
 	prototype: IETextRange;
-	new (): IETextRange;
+	new(): IETextRange;
 };
 
 interface IHitTestResult {
@@ -228,7 +228,7 @@ class HitTestContext {
 
 	public getZoneAtCoord(mouseVerticalOffset: number): IViewZoneData {
 		// The target is either a view zone or the empty space after the last view-line
-		let viewZoneWhitespace = this._viewHelper.getWhitespaceAtVerticalOffset(mouseVerticalOffset);
+		let viewZoneWhitespace = this._context.viewLayout.getWhitespaceAtVerticalOffset(mouseVerticalOffset);
 
 		if (viewZoneWhitespace) {
 			let viewZoneMiddle = viewZoneWhitespace.verticalOffset + viewZoneWhitespace.height / 2,
@@ -268,7 +268,7 @@ class HitTestContext {
 	}
 
 	public getFullLineRangeAtCoord(mouseVerticalOffset: number): { range: EditorRange; isAfterLines: boolean; } {
-		if (this._viewHelper.isAfterLines(mouseVerticalOffset)) {
+		if (this._context.viewLayout.isAfterLines(mouseVerticalOffset)) {
 			// Below the last line
 			let lineNumber = this._context.model.getLineCount();
 			let maxLineColumn = this._context.model.getLineMaxColumn(lineNumber);
@@ -278,7 +278,7 @@ class HitTestContext {
 			};
 		}
 
-		let lineNumber = this._viewHelper.getLineNumberAtVerticalOffset(mouseVerticalOffset);
+		let lineNumber = this._context.viewLayout.getLineNumberAtVerticalOffset(mouseVerticalOffset);
 		let maxLineColumn = this._context.model.getLineMaxColumn(lineNumber);
 		return {
 			range: new EditorRange(lineNumber, 1, lineNumber, maxLineColumn),
@@ -287,15 +287,15 @@ class HitTestContext {
 	}
 
 	public getLineNumberAtVerticalOffset(mouseVerticalOffset: number): number {
-		return this._viewHelper.getLineNumberAtVerticalOffset(mouseVerticalOffset);
+		return this._context.viewLayout.getLineNumberAtVerticalOffset(mouseVerticalOffset);
 	}
 
 	public isAfterLines(mouseVerticalOffset: number): boolean {
-		return this._viewHelper.isAfterLines(mouseVerticalOffset);
+		return this._context.viewLayout.isAfterLines(mouseVerticalOffset);
 	}
 
 	public getVerticalOffsetForLineNumber(lineNumber: number): number {
-		return this._viewHelper.getVerticalOffsetForLineNumber(lineNumber);
+		return this._context.viewLayout.getVerticalOffsetForLineNumber(lineNumber);
 	}
 
 	public findAttribute(element: Element, attr: string): string {
@@ -327,12 +327,12 @@ class HitTestContext {
 		return this._viewHelper.getPositionFromDOMInfo(spanNode, offset);
 	}
 
-	public getScrollTop(): number {
-		return this._viewHelper.getScrollTop();
+	public getCurrentScrollTop(): number {
+		return this._context.viewLayout.getCurrentScrollTop();
 	}
 
-	public getScrollLeft(): number {
-		return this._viewHelper.getScrollLeft();
+	public getCurrentScrollLeft(): number {
+		return this._context.viewLayout.getCurrentScrollLeft();
 	}
 }
 
@@ -351,8 +351,8 @@ abstract class BareHitTestRequest {
 		this.editorPos = editorPos;
 		this.pos = pos;
 
-		this.mouseVerticalOffset = Math.max(0, ctx.getScrollTop() + pos.y - editorPos.y);
-		this.mouseContentHorizontalOffset = ctx.getScrollLeft() + pos.x - editorPos.x - ctx.layoutInfo.contentLeft;
+		this.mouseVerticalOffset = Math.max(0, ctx.getCurrentScrollTop() + pos.y - editorPos.y);
+		this.mouseContentHorizontalOffset = ctx.getCurrentScrollLeft() + pos.x - editorPos.x - ctx.layoutInfo.contentLeft;
 		this.isInMarginArea = (pos.x - editorPos.x < ctx.layoutInfo.contentLeft);
 		this.isInContentArea = !this.isInMarginArea;
 		this.mouseColumn = Math.max(0, MouseTargetFactory._getMouseColumn(this.mouseContentHorizontalOffset, ctx.typicalHalfwidthCharacterWidth));
@@ -649,7 +649,7 @@ export class MouseTargetFactory {
 
 	public getMouseColumn(editorPos: EditorPagePosition, pos: PageCoordinates): number {
 		let layoutInfo = this._context.configuration.editor.layoutInfo;
-		let mouseContentHorizontalOffset = this._viewHelper.getScrollLeft() + pos.x - editorPos.x - layoutInfo.contentLeft;
+		let mouseContentHorizontalOffset = this._context.viewLayout.getCurrentScrollLeft() + pos.x - editorPos.x - layoutInfo.contentLeft;
 		return MouseTargetFactory._getMouseColumn(mouseContentHorizontalOffset, this._context.configuration.editor.fontInfo.typicalHalfwidthCharacterWidth);
 	}
 
