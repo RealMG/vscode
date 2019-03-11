@@ -3,149 +3,188 @@
  *  Licensed under the MIT License. See License.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
-'use strict';
-
-import Event, { filterEvent, mapEvent, any } from 'vs/base/common/event';
-import { TPromise } from 'vs/base/common/winjs.base';
-import { IWindowService, IWindowsService, INativeOpenDialogOptions, IEnterWorkspaceResult } from 'vs/platform/windows/common/windows';
-import { remote } from 'electron';
+import { Event } from 'vs/base/common/event';
+import { IWindowService, IWindowsService, INativeOpenDialogOptions, IEnterWorkspaceResult, IMessageBoxResult, IWindowConfiguration, IDevToolsOptions, IOpenSettings, IURIToOpen } from 'vs/platform/windows/common/windows';
 import { IRecentlyOpened } from 'vs/platform/history/common/history';
-import { ICommandAction } from 'vs/platform/actions/common/actions';
+import { ISerializableCommandAction } from 'vs/platform/actions/common/actions';
+import { ParsedArgs } from 'vs/platform/environment/common/environment';
+import { URI } from 'vs/base/common/uri';
+import { Disposable } from 'vs/base/common/lifecycle';
+import { hasWorkspaceFileExtension } from 'vs/platform/workspaces/common/workspaces';
+import { ILabelService } from 'vs/platform/label/common/label';
 
-export class WindowService implements IWindowService {
+export class WindowService extends Disposable implements IWindowService {
 
 	readonly onDidChangeFocus: Event<boolean>;
+	readonly onDidChangeMaximize: Event<boolean>;
 
 	_serviceBrand: any;
 
+	private windowId: number;
+
+	private _hasFocus: boolean;
+	get hasFocus(): boolean { return this._hasFocus; }
+
 	constructor(
-		private windowId: number,
-		@IWindowsService private windowsService: IWindowsService
+		private configuration: IWindowConfiguration,
+		@IWindowsService private readonly windowsService: IWindowsService,
+		@ILabelService private readonly labelService: ILabelService
 	) {
-		const onThisWindowFocus = mapEvent(filterEvent(windowsService.onWindowFocus, id => id === windowId), _ => true);
-		const onThisWindowBlur = mapEvent(filterEvent(windowsService.onWindowBlur, id => id === windowId), _ => false);
-		this.onDidChangeFocus = any(onThisWindowFocus, onThisWindowBlur);
+		super();
+
+		this.windowId = configuration.windowId;
+
+		const onThisWindowFocus = Event.map(Event.filter(windowsService.onWindowFocus, id => id === this.windowId), _ => true);
+		const onThisWindowBlur = Event.map(Event.filter(windowsService.onWindowBlur, id => id === this.windowId), _ => false);
+		const onThisWindowMaximize = Event.map(Event.filter(windowsService.onWindowMaximize, id => id === this.windowId), _ => true);
+		const onThisWindowUnmaximize = Event.map(Event.filter(windowsService.onWindowUnmaximize, id => id === this.windowId), _ => false);
+		this.onDidChangeFocus = Event.any(onThisWindowFocus, onThisWindowBlur);
+		this.onDidChangeMaximize = Event.any(onThisWindowMaximize, onThisWindowUnmaximize);
+
+		this._hasFocus = document.hasFocus();
+		this.isFocused().then(focused => this._hasFocus = focused);
+		this._register(this.onDidChangeFocus(focus => this._hasFocus = focus));
 	}
 
 	getCurrentWindowId(): number {
 		return this.windowId;
 	}
 
-	pickFileFolderAndOpen(options: INativeOpenDialogOptions): TPromise<void> {
+	getConfiguration(): IWindowConfiguration {
+		return this.configuration;
+	}
+
+	pickFileFolderAndOpen(options: INativeOpenDialogOptions): Promise<void> {
 		options.windowId = this.windowId;
 
 		return this.windowsService.pickFileFolderAndOpen(options);
 	}
 
-	pickFileAndOpen(options: INativeOpenDialogOptions): TPromise<void> {
+	pickFileAndOpen(options: INativeOpenDialogOptions): Promise<void> {
 		options.windowId = this.windowId;
 
 		return this.windowsService.pickFileAndOpen(options);
 	}
 
-	pickFolderAndOpen(options: INativeOpenDialogOptions): TPromise<void> {
+	pickFolderAndOpen(options: INativeOpenDialogOptions): Promise<void> {
 		options.windowId = this.windowId;
 
 		return this.windowsService.pickFolderAndOpen(options);
 	}
 
-	reloadWindow(): TPromise<void> {
-		return this.windowsService.reloadWindow(this.windowId);
+	pickWorkspaceAndOpen(options: INativeOpenDialogOptions): Promise<void> {
+		options.windowId = this.windowId;
+
+		return this.windowsService.pickWorkspaceAndOpen(options);
 	}
 
-	openDevTools(): TPromise<void> {
-		return this.windowsService.openDevTools(this.windowId);
+	reloadWindow(args?: ParsedArgs): Promise<void> {
+		return this.windowsService.reloadWindow(this.windowId, args);
 	}
 
-	toggleDevTools(): TPromise<void> {
+	openDevTools(options?: IDevToolsOptions): Promise<void> {
+		return this.windowsService.openDevTools(this.windowId, options);
+	}
+
+	toggleDevTools(): Promise<void> {
 		return this.windowsService.toggleDevTools(this.windowId);
 	}
 
-	closeWorkspace(): TPromise<void> {
+	closeWorkspace(): Promise<void> {
 		return this.windowsService.closeWorkspace(this.windowId);
 	}
 
-	openWorkspace(): TPromise<void> {
-		return this.windowsService.openWorkspace(this.windowId);
+	enterWorkspace(path: URI): Promise<IEnterWorkspaceResult | undefined> {
+		return this.windowsService.enterWorkspace(this.windowId, path);
 	}
 
-	createAndEnterWorkspace(folders?: string[], path?: string): TPromise<IEnterWorkspaceResult> {
-		return this.windowsService.createAndEnterWorkspace(this.windowId, folders, path);
+	openWindow(uris: IURIToOpen[], options?: IOpenSettings): Promise<void> {
+		if (!!this.configuration.remoteAuthority) {
+			uris.forEach(u => u.label = u.label || this.getRecentLabel(u, !!(options && options.forceOpenWorkspaceAsFile)));
+		}
+		return this.windowsService.openWindow(this.windowId, uris, options);
 	}
 
-	saveAndEnterWorkspace(path: string): TPromise<IEnterWorkspaceResult> {
-		return this.windowsService.saveAndEnterWorkspace(this.windowId, path);
-	}
-
-	closeWindow(): TPromise<void> {
+	closeWindow(): Promise<void> {
 		return this.windowsService.closeWindow(this.windowId);
 	}
 
-	toggleFullScreen(): TPromise<void> {
+	toggleFullScreen(): Promise<void> {
 		return this.windowsService.toggleFullScreen(this.windowId);
 	}
 
-	setRepresentedFilename(fileName: string): TPromise<void> {
+	setRepresentedFilename(fileName: string): Promise<void> {
 		return this.windowsService.setRepresentedFilename(this.windowId, fileName);
 	}
 
-	getRecentlyOpened(): TPromise<IRecentlyOpened> {
+	getRecentlyOpened(): Promise<IRecentlyOpened> {
 		return this.windowsService.getRecentlyOpened(this.windowId);
 	}
 
-	focusWindow(): TPromise<void> {
+	focusWindow(): Promise<void> {
 		return this.windowsService.focusWindow(this.windowId);
 	}
 
-	isFocused(): TPromise<boolean> {
+	isFocused(): Promise<boolean> {
 		return this.windowsService.isFocused(this.windowId);
 	}
 
-	isMaximized(): TPromise<boolean> {
+	isMaximized(): Promise<boolean> {
 		return this.windowsService.isMaximized(this.windowId);
 	}
 
-	maximizeWindow(): TPromise<void> {
+	maximizeWindow(): Promise<void> {
 		return this.windowsService.maximizeWindow(this.windowId);
 	}
 
-	unmaximizeWindow(): TPromise<void> {
+	unmaximizeWindow(): Promise<void> {
 		return this.windowsService.unmaximizeWindow(this.windowId);
 	}
 
-	onWindowTitleDoubleClick(): TPromise<void> {
+	minimizeWindow(): Promise<void> {
+		return this.windowsService.minimizeWindow(this.windowId);
+	}
+
+	onWindowTitleDoubleClick(): Promise<void> {
 		return this.windowsService.onWindowTitleDoubleClick(this.windowId);
 	}
 
-	setDocumentEdited(flag: boolean): TPromise<void> {
+	setDocumentEdited(flag: boolean): Promise<void> {
 		return this.windowsService.setDocumentEdited(this.windowId, flag);
 	}
 
-	show(): TPromise<void> {
+	show(): Promise<void> {
 		return this.windowsService.showWindow(this.windowId);
 	}
 
-	showMessageBox(options: Electron.MessageBoxOptions): number {
-		return remote.dialog.showMessageBox(remote.getCurrentWindow(), options);
+	showMessageBox(options: Electron.MessageBoxOptions): Promise<IMessageBoxResult> {
+		return this.windowsService.showMessageBox(this.windowId, options);
 	}
 
-	showSaveDialog(options: Electron.SaveDialogOptions, callback?: (fileName: string) => void): string {
-		if (callback) {
-			return remote.dialog.showSaveDialog(remote.getCurrentWindow(), options, callback);
-		}
-
-		return remote.dialog.showSaveDialog(remote.getCurrentWindow(), options); // https://github.com/electron/electron/issues/4936
+	showSaveDialog(options: Electron.SaveDialogOptions): Promise<string> {
+		return this.windowsService.showSaveDialog(this.windowId, options);
 	}
 
-	showOpenDialog(options: Electron.OpenDialogOptions, callback?: (fileNames: string[]) => void): string[] {
-		if (callback) {
-			return remote.dialog.showOpenDialog(remote.getCurrentWindow(), options, callback);
-		}
-
-		return remote.dialog.showOpenDialog(remote.getCurrentWindow(), options); // https://github.com/electron/electron/issues/4936
+	showOpenDialog(options: Electron.OpenDialogOptions): Promise<string[]> {
+		return this.windowsService.showOpenDialog(this.windowId, options);
 	}
 
-	updateTouchBar(items: ICommandAction[][]): TPromise<void> {
+	updateTouchBar(items: ISerializableCommandAction[][]): Promise<void> {
 		return this.windowsService.updateTouchBar(this.windowId, items);
 	}
+
+	resolveProxy(url: string): Promise<string | undefined> {
+		return this.windowsService.resolveProxy(this.windowId, url);
+	}
+
+	private getRecentLabel(u: IURIToOpen, forceOpenWorkspaceAsFile: boolean): string {
+		if (u.typeHint === 'folder') {
+			return this.labelService.getWorkspaceLabel(u.uri, { verbose: true });
+		} else if (!forceOpenWorkspaceAsFile && hasWorkspaceFileExtension(u.uri.path)) {
+			return this.labelService.getWorkspaceLabel({ id: '', configPath: u.uri }, { verbose: true });
+		} else {
+			return this.labelService.getUriLabel(u.uri);
+		}
+	}
 }
+

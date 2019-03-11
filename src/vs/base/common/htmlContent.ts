@@ -3,14 +3,13 @@
  *  Licensed under the MIT License. See License.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
-'use strict';
-
 import { equals } from 'vs/base/common/arrays';
-import { marked } from 'vs/base/common/marked/marked';
+import { UriComponents } from 'vs/base/common/uri';
 
 export interface IMarkdownString {
 	value: string;
 	isTrusted?: boolean;
+	uris?: { [href: string]: UriComponents };
 }
 
 export class MarkdownString implements IMarkdownString {
@@ -43,7 +42,7 @@ export class MarkdownString implements IMarkdownString {
 	}
 }
 
-export function isEmptyMarkdownString(oneOrMany: IMarkdownString | IMarkdownString[]): boolean {
+export function isEmptyMarkdownString(oneOrMany: IMarkdownString | IMarkdownString[] | null | undefined): boolean {
 	if (isMarkdownString(oneOrMany)) {
 		return !oneOrMany.value;
 	} else if (Array.isArray(oneOrMany)) {
@@ -58,7 +57,7 @@ export function isMarkdownString(thing: any): thing is IMarkdownString {
 		return true;
 	} else if (thing && typeof thing === 'object') {
 		return typeof (<IMarkdownString>thing).value === 'string'
-			&& (typeof (<IMarkdownString>thing).isTrusted === 'boolean' || (<IMarkdownString>thing).isTrusted === void 0);
+			&& (typeof (<IMarkdownString>thing).isTrusted === 'boolean' || (<IMarkdownString>thing).isTrusted === undefined);
 	}
 	return false;
 }
@@ -92,17 +91,4 @@ export function removeMarkdownEscapes(text: string): string {
 		return text;
 	}
 	return text.replace(/\\([\\`*_{}[\]()#+\-.!])/g, '$1');
-}
-
-export function containsCommandLink(value: string): boolean {
-	let uses = false;
-	const renderer = new marked.Renderer();
-	renderer.link = (href, title, text): string => {
-		if (href.match(/^command:/i)) {
-			uses = true;
-		}
-		return 'link';
-	};
-	marked(value, { renderer });
-	return uses;
 }

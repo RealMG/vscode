@@ -2,26 +2,24 @@
  *  Copyright (c) Microsoft Corporation. All rights reserved.
  *  Licensed under the MIT License. See License.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
-'use strict';
 
-import { TPromise } from 'vs/base/common/winjs.base';
 import { IDisposable } from 'vs/base/common/lifecycle';
 import { guessMimeTypes } from 'vs/base/common/mime';
-import paths = require('vs/base/common/paths');
-import URI from 'vs/base/common/uri';
-import { ConfigurationSource, IConfigurationService } from 'vs/platform/configuration/common/configuration';
+import { extname } from 'vs/base/common/path';
+import { URI } from 'vs/base/common/uri';
+import { IConfigurationService, ConfigurationTarget, ConfigurationTargetToString } from 'vs/platform/configuration/common/configuration';
 import { IKeybindingService, KeybindingSource } from 'vs/platform/keybinding/common/keybinding';
-import { ILifecycleService, ShutdownReason } from 'vs/platform/lifecycle/common/lifecycle';
 import { ITelemetryService, ITelemetryInfo, ITelemetryData } from 'vs/platform/telemetry/common/telemetry';
+import { ILogService } from 'vs/platform/log/common/log';
 
-export const NullTelemetryService = {
-	_serviceBrand: undefined,
+export const NullTelemetryService = new class implements ITelemetryService {
+	_serviceBrand: undefined;
 	publicLog(eventName: string, data?: ITelemetryData) {
-		return TPromise.as<void>(null);
-	},
-	isOptedIn: true,
-	getTelemetryInfo(): TPromise<ITelemetryInfo> {
-		return TPromise.as({
+		return Promise.resolve(undefined);
+	}
+	isOptedIn: true;
+	getTelemetryInfo(): Promise<ITelemetryInfo> {
+		return Promise.resolve({
 			instanceId: 'someValue.instanceId',
 			sessionId: 'someValue.sessionId',
 			machineId: 'someValue.machineId'
@@ -31,57 +29,63 @@ export const NullTelemetryService = {
 
 export interface ITelemetryAppender {
 	log(eventName: string, data: any): void;
+	dispose(): Promise<any> | undefined;
 }
 
 export function combinedAppender(...appenders: ITelemetryAppender[]): ITelemetryAppender {
-	return { log: (e, d) => appenders.forEach(a => a.log(e, d)) };
+	return {
+		log: (e, d) => appenders.forEach(a => a.log(e, d)),
+		dispose: () => Promise.all(appenders.map(a => a.dispose()))
+	};
 }
 
-export const NullAppender: ITelemetryAppender = { log: () => null };
+export const NullAppender: ITelemetryAppender = { log: () => null, dispose: () => Promise.resolve(null) };
 
-// --- util
 
-export function anonymize(input: string): string {
-	if (!input) {
-		return input;
+export class LogAppender implements ITelemetryAppender {
+
+	private commonPropertiesRegex = /^sessionID$|^version$|^timestamp$|^commitHash$|^common\./;
+	constructor(@ILogService private readonly _logService: ILogService) { }
+
+	dispose(): Promise<any> {
+		return Promise.resolve(undefined);
 	}
 
-	let r = '';
-	for (let i = 0; i < input.length; i++) {
-		let ch = input[i];
-		if (ch >= '0' && ch <= '9') {
-			r += '0';
-			continue;
-		}
-		if (ch >= 'a' && ch <= 'z') {
-			r += 'a';
-			continue;
-		}
-		if (ch >= 'A' && ch <= 'Z') {
-			r += 'A';
-			continue;
-		}
-		r += ch;
+	log(eventName: string, data: any): void {
+		const strippedData = {};
+		Object.keys(data).forEach(key => {
+			if (!this.commonPropertiesRegex.test(key)) {
+				strippedData[key] = data[key];
+			}
+		});
+		this._logService.trace(`telemetry/${eventName}`, strippedData);
 	}
-	return r;
 }
 
+/* __GDPR__FRAGMENT__
+	"URIDescriptor" : {
+		"mimeType" : { "classification": "SystemMetaData", "purpose": "FeatureInsight" },
+		"scheme": { "classification": "SystemMetaData", "purpose": "FeatureInsight" },
+		"ext": { "classification": "SystemMetaData", "purpose": "FeatureInsight" },
+		"path": { "classification": "SystemMetaData", "purpose": "FeatureInsight" }
+	}
+*/
 export interface URIDescriptor {
 	mimeType?: string;
+	scheme?: string;
 	ext?: string;
 	path?: string;
 }
 
-export function telemetryURIDescriptor(uri: URI): URIDescriptor {
+export function telemetryURIDescriptor(uri: URI, hashPath: (path: string) => string): URIDescriptor {
 	const fsPath = uri && uri.fsPath;
-	return fsPath ? { mimeType: guessMimeTypes(fsPath).join(', '), ext: paths.extname(fsPath), path: anonymize(fsPath) } : {};
+	return fsPath ? { mimeType: guessMimeTypes(fsPath).join(', '), scheme: uri.scheme, ext: extname(fsPath), path: hashPath(fsPath) } : {};
 }
 
 /**
  * Only add settings that cannot contain any personal/private information of users (PII).
  */
 const configurationValueWhitelist = [
-	'editor.tabCompletion',
 	'editor.fontFamily',
 	'editor.fontWeight',
 	'editor.fontSize',
@@ -91,11 +95,13 @@ const configurationValueWhitelist = [
 	'editor.rulers',
 	'editor.wordSeparators',
 	'editor.tabSize',
+	'editor.indentSize',
 	'editor.insertSpaces',
 	'editor.detectIndentation',
 	'editor.roundedSelection',
 	'editor.scrollBeyondLastLine',
 	'editor.minimap.enabled',
+	'editor.minimap.side',
 	'editor.minimap.renderCharacters',
 	'editor.minimap.maxColumn',
 	'editor.find.seedSearchStringFromSelection',
@@ -107,8 +113,11 @@ const configurationValueWhitelist = [
 	'editor.multiCursorModifier',
 	'editor.quickSuggestions',
 	'editor.quickSuggestionsDelay',
-	'editor.parameterHints',
+	'editor.parameterHints.enabled',
+	'editor.parameterHints.cycle',
 	'editor.autoClosingBrackets',
+	'editor.autoClosingQuotes',
+	'editor.autoSurround',
 	'editor.autoIndent',
 	'editor.formatOnType',
 	'editor.formatOnPaste',
@@ -118,13 +127,16 @@ const configurationValueWhitelist = [
 	'editor.snippetSuggestions',
 	'editor.emptySelectionClipboard',
 	'editor.wordBasedSuggestions',
+	'editor.suggestSelection',
 	'editor.suggestFontSize',
 	'editor.suggestLineHeight',
+	'editor.tabCompletion',
 	'editor.selectionHighlight',
 	'editor.occurrencesHighlight',
 	'editor.overviewRulerLanes',
 	'editor.overviewRulerBorder',
 	'editor.cursorBlinking',
+	'editor.cursorSmoothCaretAnimation',
 	'editor.cursorStyle',
 	'editor.mouseWheelZoom',
 	'editor.fontLigatures',
@@ -145,62 +157,78 @@ const configurationValueWhitelist = [
 	'editor.formatOnSave',
 	'editor.colorDecorators',
 
-	'window.zoomLevel',
-	'files.autoSave',
-	'files.hotExit',
+	'breadcrumbs.enabled',
+	'breadcrumbs.filePath',
+	'breadcrumbs.symbolPath',
+	'breadcrumbs.symbolSortOrder',
+	'breadcrumbs.useQuickPick',
+	'explorer.openEditors.visible',
+	'extensions.autoUpdate',
 	'files.associations',
-	'workbench.statusBar.visible',
+	'files.autoGuessEncoding',
+	'files.autoSave',
+	'files.autoSaveDelay',
+	'files.encoding',
+	'files.eol',
+	'files.hotExit',
 	'files.trimTrailingWhitespace',
 	'git.confirmSync',
-	'workbench.sideBar.location',
-	'window.openFilesInNewWindow',
-	'javascript.validate.enable',
-	'window.reopenFolders',
-	'window.restoreWindows',
-	'extensions.autoUpdate',
-	'files.eol',
-	'explorer.openEditors.visible',
-	'workbench.editor.enablePreview',
-	'files.autoSaveDelay',
-	'workbench.editor.showTabs',
-	'files.encoding',
-	'files.autoGuessEncoding',
 	'git.enabled',
 	'http.proxyStrictSSL',
-	'terminal.integrated.fontFamily',
-	'workbench.editor.enablePreviewFromQuickOpen',
-	'workbench.editor.swipeToNavigate',
+	'javascript.validate.enable',
 	'php.builtInCompletions.enable',
 	'php.validate.enable',
 	'php.validate.run',
-	'workbench.welcome.enabled',
+	'terminal.integrated.fontFamily',
+	'window.openFilesInNewWindow',
+	'window.restoreWindows',
+	'window.zoomLevel',
+	'workbench.editor.enablePreview',
+	'workbench.editor.enablePreviewFromQuickOpen',
+	'workbench.editor.showTabs',
+	'workbench.editor.highlightModifiedTabs',
+	'workbench.editor.swipeToNavigate',
+	'workbench.sideBar.location',
 	'workbench.startupEditor',
+	'workbench.statusBar.visible',
+	'workbench.welcome.enabled',
 ];
 
 export function configurationTelemetry(telemetryService: ITelemetryService, configurationService: IConfigurationService): IDisposable {
-	return configurationService.onDidUpdateConfiguration(event => {
-		if (event.source !== ConfigurationSource.Default) {
+	return configurationService.onDidChangeConfiguration(event => {
+		if (event.source !== ConfigurationTarget.DEFAULT) {
+			/* __GDPR__
+				"updateConfiguration" : {
+					"configurationSource" : { "classification": "SystemMetaData", "purpose": "FeatureInsight" },
+					"configurationKeys": { "classification": "SystemMetaData", "purpose": "FeatureInsight" }
+				}
+			*/
 			telemetryService.publicLog('updateConfiguration', {
-				configurationSource: ConfigurationSource[event.source],
+				configurationSource: ConfigurationTargetToString(event.source),
 				configurationKeys: flattenKeys(event.sourceConfig)
 			});
+			/* __GDPR__
+				"updateConfigurationValues" : {
+					"configurationSource" : { "classification": "SystemMetaData", "purpose": "FeatureInsight" },
+					"configurationValues": { "classification": "CustomerContent", "purpose": "FeatureInsight" }
+				}
+			*/
 			telemetryService.publicLog('updateConfigurationValues', {
-				configurationSource: ConfigurationSource[event.source],
+				configurationSource: ConfigurationTargetToString(event.source),
 				configurationValues: flattenValues(event.sourceConfig, configurationValueWhitelist)
 			});
 		}
 	});
 }
 
-export function lifecycleTelemetry(telemetryService: ITelemetryService, lifecycleService: ILifecycleService): IDisposable {
-	return lifecycleService.onShutdown(event => {
-		telemetryService.publicLog('shutdown', { reason: ShutdownReason[event] });
-	});
-}
-
 export function keybindingsTelemetry(telemetryService: ITelemetryService, keybindingService: IKeybindingService): IDisposable {
 	return keybindingService.onDidUpdateKeybindings(event => {
 		if (event.source === KeybindingSource.User && event.keybindings) {
+			/* __GDPR__
+				"updateKeybindings" : {
+					"bindings": { "classification": "CustomerContent", "purpose": "FeatureInsight" }
+				}
+			*/
 			telemetryService.publicLog('updateKeybindings', {
 				bindings: event.keybindings.map(binding => ({
 					key: binding.key,
@@ -243,5 +271,5 @@ function flattenValues(value: Object, keys: string[]): { [key: string]: any }[] 
 			array.push({ [key]: v });
 		}
 		return array;
-	}, []);
+	}, <{ [key: string]: any }[]>[]);
 }

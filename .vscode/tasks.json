@@ -29,15 +29,32 @@
 			}
 		},
 		{
+			"type": "npm",
+			"script": "strict-null-check-watch",
+			"label": "TS - Strict Null Checks",
+			"isBackground": true,
+			"presentation": {
+				"reveal": "never"
+			},
+			"problemMatcher": {
+				"base": "$tsc-watch",
+				"owner": "typescript-strict-null",
+				"applyTo": "allDocuments"
+			},
+			"runOptions": {
+				"runOn": "folderOpen"
+			}
+		},
+		{
 			"type": "gulp",
 			"task": "tslint",
 			"label": "Run tslint",
 			"problemMatcher": [
-				"$tslint4"
+				"$tslint5"
 			]
 		},
 		{
-			"taskName": "Run tests",
+			"label": "Run tests",
 			"type": "shell",
 			"command": "./scripts/test.sh",
 			"windows": {
@@ -50,7 +67,7 @@
 			}
 		},
 		{
-			"taskName": "Run Dev",
+			"label": "Run Dev",
 			"type": "shell",
 			"command": "./scripts/code.sh",
 			"windows": {

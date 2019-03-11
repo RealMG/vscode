@@ -2,17 +2,15 @@
  *  Copyright (c) Microsoft Corporation. All rights reserved.
  *  Licensed under the MIT License. See License.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
-'use strict';
 
 import * as nls from 'vs/nls';
-import { ICommonCodeEditor } from 'vs/editor/common/editorCommon';
-import { editorAction, EditorAction, ServicesAccessor } from 'vs/editor/common/editorCommonExtensions';
+import { ICodeEditor } from 'vs/editor/browser/editorBrowser';
+import { EditorAction, ServicesAccessor, registerEditorAction } from 'vs/editor/browser/editorExtensions';
 import { IStandaloneThemeService } from 'vs/editor/standalone/common/standaloneThemeService';
 
-@editorAction
 class ToggleHighContrast extends EditorAction {
 
-	private _originalThemeName: string;
+	private _originalThemeName: string | null;
 
 	constructor() {
 		super({
@@ -24,7 +22,7 @@ class ToggleHighContrast extends EditorAction {
 		this._originalThemeName = null;
 	}
 
-	public run(accessor: ServicesAccessor, editor: ICommonCodeEditor): void {
+	public run(accessor: ServicesAccessor, editor: ICodeEditor): void {
 		const standaloneThemeService = accessor.get(IStandaloneThemeService);
 		if (this._originalThemeName) {
 			// We must toggle back to the integrator's theme
@@ -36,3 +34,5 @@ class ToggleHighContrast extends EditorAction {
 		}
 	}
 }
+
+registerEditorAction(ToggleHighContrast);
